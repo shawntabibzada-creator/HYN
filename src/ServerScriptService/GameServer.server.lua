@@ -24,18 +24,18 @@ local MonetizationService = require(ServerScriptService.Modules.MonetizationServ
 -- places) — this arena is small and doesn't benefit from streaming anyway.
 
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
-local SubmitCodeGuess = Remotes.SubmitCodeGuess
-local ThrowFlashbang = Remotes.ThrowFlashbang
-local FlashbangEffect = Remotes.FlashbangEffect
-local FlashbangCooldownRemote = Remotes.FlashbangCooldown
-local ThrowEMP = Remotes.ThrowEMP
-local EMPEffect = Remotes.EMPEffect
-local EMPCooldownRemote = Remotes.EMPCooldown
-local ThrowStun = Remotes.ThrowStun
-local StunEffect = Remotes.StunEffect
-local StunCooldownRemote = Remotes.StunCooldown
-local PlayerEliminated = Remotes.PlayerEliminated
-local RoundStatus = Remotes.RoundStatus
+local SubmitCodeGuess = Remotes:WaitForChild("SubmitCodeGuess")
+local ThrowFlashbang = Remotes:WaitForChild("ThrowFlashbang")
+local FlashbangEffect = Remotes:WaitForChild("FlashbangEffect")
+local FlashbangCooldownRemote = Remotes:WaitForChild("FlashbangCooldown")
+local ThrowEMP = Remotes:WaitForChild("ThrowEMP")
+local EMPEffect = Remotes:WaitForChild("EMPEffect")
+local EMPCooldownRemote = Remotes:WaitForChild("EMPCooldown")
+local ThrowStun = Remotes:WaitForChild("ThrowStun")
+local StunEffect = Remotes:WaitForChild("StunEffect")
+local StunCooldownRemote = Remotes:WaitForChild("StunCooldown")
+local PlayerEliminated = Remotes:WaitForChild("PlayerEliminated")
+local RoundStatus = Remotes:WaitForChild("RoundStatus")
 
 local MIN_PLAYERS = 2
 local INTERMISSION_TIME = 15
