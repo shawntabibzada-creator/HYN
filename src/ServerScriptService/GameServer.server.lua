@@ -10,9 +10,13 @@ local Workspace = game:GetService("Workspace")
 local TweenService = game:GetService("TweenService")
 local ServerScriptService = game:GetService("ServerScriptService")
 
+print("[CodeDuel] GameServer.server.lua loaded, starting requires...")
+
 local MapGenerator = require(ReplicatedStorage.Modules.MapGenerator)
 local CodeUtils = require(ReplicatedStorage.Modules.CodeUtils)
 local MonetizationService = require(ServerScriptService.Modules.MonetizationService)
+
+print("[CodeDuel] all modules loaded OK")
 
 -- This arena is small enough that content streaming only causes trouble:
 -- large single parts (the floor slabs) can pop in/out as a whole as a
@@ -350,11 +354,13 @@ end
 
 local function runRound()
 	local players = Players:GetPlayers()
+	print("[CodeDuel] round loop tick, players connected:", #players)
 	if #players < MIN_PLAYERS then
 		broadcastStatus("Waiting", { count = #players, needed = MIN_PLAYERS })
 		return
 	end
 
+	print("[CodeDuel] enough players, starting intermission")
 	broadcastStatus("Intermission", { seconds = INTERMISSION_TIME })
 	task.wait(INTERMISSION_TIME)
 

@@ -212,6 +212,7 @@ end)
 local countdownConn
 
 RoundStatus.OnClientEvent:Connect(function(status, data)
+	print("[CodeDuel] client received RoundStatus:", status)
 	if countdownConn then
 		countdownConn:Disconnect()
 		countdownConn = nil
