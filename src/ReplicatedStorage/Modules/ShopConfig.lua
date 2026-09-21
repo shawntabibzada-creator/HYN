@@ -1,5 +1,5 @@
 -- Central registry of monetized items. The `id` fields are placeholders
--- (0) — before this goes live, create the matching Game Passes and
+-- (0). Before this goes live, create the matching Game Passes and
 -- Developer Products for this experience in the Creator Dashboard
 -- (Monetization tab) and paste their real ids in here. Anything left at 0
 -- is skipped by MonetizationService and shown as "not configured" in the
@@ -41,6 +41,30 @@ ShopConfig.DeveloperProducts = {
 		name = "Extra Flashbang Charge",
 		description = "Instantly refills your flashbang for the current round.",
 		kind = "Round boost",
+	},
+	{
+		key = "PickMapTown",
+		id = 0, -- TODO: your Developer Product id
+		name = "Play Town Next",
+		description = "The next round is guaranteed to be the Town map.",
+		kind = "Pick next map",
+		mapKey = "Town",
+	},
+	{
+		key = "PickMapCompound",
+		id = 0, -- TODO: your Developer Product id
+		name = "Play Compound Next",
+		description = "The next round is guaranteed to be the Compound map.",
+		kind = "Pick next map",
+		mapKey = "Compound",
+	},
+	{
+		key = "PickMapDesert",
+		id = 0, -- TODO: your Developer Product id
+		name = "Play Desert Next",
+		description = "The next round is guaranteed to be the Desert map.",
+		kind = "Pick next map",
+		mapKey = "Desert",
 	},
 }
 

@@ -17,11 +17,12 @@ local CodeUtils = require(ReplicatedStorage.Modules.CodeUtils)
 local MonetizationService = require(ServerScriptService.Modules.MonetizationService)
 
 -- NOTE: StreamingEnabled can no longer be written from a normal script at
--- runtime (Roblox now restricts it to Studio/plugin capability) — doing so
--- here used to throw and silently kill this entire script before it ever
--- reached the round loop. Turn it off from Studio instead: File > Game
--- Settings > World tab > Streaming, or just leave it off (default for new
--- places) — this arena is small and doesn't benefit from streaming anyway.
+-- runtime (Roblox now restricts it to Studio/plugin capability), so doing
+-- this here used to throw and silently kill this entire script before it
+-- ever reached the round loop. Turn it off from Studio instead: File >
+-- Game Settings > World tab > Streaming, or just leave it off (default
+-- for new places) - this arena is small and doesn't benefit from
+-- streaming anyway.
 
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 local SubmitCodeGuess = Remotes:WaitForChild("SubmitCodeGuess")
@@ -43,6 +44,7 @@ local POST_ROUND_TIME = 6
 local DEFAULT_WALK_SPEED = 16
 local SPECTATOR_POSITION = Vector3.new(0, 300, 0)
 local GRENADE_MIN_FLIGHT_TIME = 0.15
+local GRENADE_MIN_CHARGE_FRACTION = 0.2 -- a quick tap still throws it this far
 
 local FLASHBANG_COOLDOWN = 6
 local FAST_FLASHBANG_COOLDOWN = 4 -- with the "Quick Fuse" game pass
@@ -60,7 +62,7 @@ local EMP_THROW_RANGE = 150
 local EMP_THROW_SPEED = 110
 
 local STUN_COOLDOWN = 8
-local STUN_RADIUS = 25
+local STUN_RADIUS = 15
 local STUN_DURATION = 4
 local STUN_SPEED_MULTIPLIER = 0.35
 local STUN_THROW_RANGE = 150
@@ -80,6 +82,12 @@ local stunReadyAt = {}
 local empBlockedUntil = {} -- [Player] = os.clock() timestamp until guessing is jammed
 local stunnedUntil = {} -- [Player] = os.clock() timestamp until movement is slowed
 local roundActive = false
+local pinnedNextMap = nil -- set by a "pick next map" purchase; consumed by the next round
+
+local MAP_NAMES = {}
+for _, choice in ipairs(MapGenerator.Choices) do
+	MAP_NAMES[choice.key] = choice.name
+end
 
 local function ensureLeaderstats(player)
 	if player:FindFirstChild("leaderstats") then
@@ -310,6 +318,15 @@ local function spawnGrenadeProjectile(name, origin, landingPoint, flightTime, co
 	return grenade
 end
 
+-- Client-reported charge fraction is untrusted input: clamp it to a sane
+-- range so nobody can throw further than the ability's own max by lying.
+local function clampChargeFraction(rawFraction)
+	if typeof(rawFraction) ~= "number" then
+		return 1
+	end
+	return math.clamp(rawFraction, GRENADE_MIN_CHARGE_FRACTION, 1)
+end
+
 -- True (and starts the cooldown) if the player's ability was off cooldown.
 local function tryStartCooldown(readyAtTable, player, cooldown, cooldownRemote)
 	local now = os.clock()
@@ -321,7 +338,7 @@ local function tryStartCooldown(readyAtTable, player, cooldown, cooldownRemote)
 	return true
 end
 
-ThrowFlashbang.OnServerEvent:Connect(function(player, aimPoint)
+ThrowFlashbang.OnServerEvent:Connect(function(player, aimPoint, chargeFraction)
 	if not roundActive or not aliveSet[player] or typeof(aimPoint) ~= "Vector3" then
 		return
 	end
@@ -338,7 +355,8 @@ ThrowFlashbang.OnServerEvent:Connect(function(player, aimPoint)
 		return
 	end
 
-	local landingPoint, flightTime = computeThrow(hrp, aimPoint, FLASHBANG_THROW_RANGE, FLASHBANG_THROW_SPEED)
+	local throwRange = FLASHBANG_THROW_RANGE * clampChargeFraction(chargeFraction)
+	local landingPoint, flightTime = computeThrow(hrp, aimPoint, throwRange, FLASHBANG_THROW_SPEED)
 	local grenade = spawnGrenadeProjectile(
 		"FlashbangGrenade",
 		hrp.Position + Vector3.new(0, 1.5, 0),
@@ -379,7 +397,7 @@ ThrowFlashbang.OnServerEvent:Connect(function(player, aimPoint)
 	end)
 end)
 
-ThrowEMP.OnServerEvent:Connect(function(player, aimPoint)
+ThrowEMP.OnServerEvent:Connect(function(player, aimPoint, chargeFraction)
 	if not roundActive or not aliveSet[player] or typeof(aimPoint) ~= "Vector3" then
 		return
 	end
@@ -393,7 +411,8 @@ ThrowEMP.OnServerEvent:Connect(function(player, aimPoint)
 		return
 	end
 
-	local landingPoint, flightTime = computeThrow(hrp, aimPoint, EMP_THROW_RANGE, EMP_THROW_SPEED)
+	local throwRange = EMP_THROW_RANGE * clampChargeFraction(chargeFraction)
+	local landingPoint, flightTime = computeThrow(hrp, aimPoint, throwRange, EMP_THROW_SPEED)
 	local grenade = spawnGrenadeProjectile(
 		"EMPGrenade",
 		hrp.Position + Vector3.new(0, 1.5, 0),
@@ -439,7 +458,7 @@ local function applyStun(player, humanoid)
 	end)
 end
 
-ThrowStun.OnServerEvent:Connect(function(player, aimPoint)
+ThrowStun.OnServerEvent:Connect(function(player, aimPoint, chargeFraction)
 	if not roundActive or not aliveSet[player] or typeof(aimPoint) ~= "Vector3" then
 		return
 	end
@@ -453,7 +472,8 @@ ThrowStun.OnServerEvent:Connect(function(player, aimPoint)
 		return
 	end
 
-	local landingPoint, flightTime = computeThrow(hrp, aimPoint, STUN_THROW_RANGE, STUN_THROW_SPEED)
+	local throwRange = STUN_THROW_RANGE * clampChargeFraction(chargeFraction)
+	local landingPoint, flightTime = computeThrow(hrp, aimPoint, throwRange, STUN_THROW_SPEED)
 	local grenade = spawnGrenadeProjectile(
 		"StunGrenade",
 		hrp.Position + Vector3.new(0, 1.5, 0),
@@ -483,6 +503,13 @@ MonetizationService.ExtraFlashbangGranted:Connect(function(player)
 	if roundActive and aliveSet[player] then
 		flashbangReadyAt[player] = 0
 		FlashbangCooldownRemote:FireClient(player, 0)
+	end
+end)
+
+MonetizationService.MapPinned:Connect(function(player, mapKey)
+	if MAP_NAMES[mapKey] then
+		pinnedNextMap = mapKey
+		broadcastStatus("MapPinned", { by = player.Name, mapName = MAP_NAMES[mapKey] })
 	end
 end)
 
@@ -534,7 +561,9 @@ local function runRound()
 	if oldMap then
 		oldMap:Destroy()
 	end
-	local mapFolder, spawnPoints = MapGenerator.Generate(Workspace)
+	local mapKey = pinnedNextMap or MapGenerator.RandomKey()
+	pinnedNextMap = nil
+	local mapFolder, spawnPoints = MapGenerator.Generate(mapKey, Workspace)
 
 	table.clear(playerCodes)
 	table.clear(aliveSet)
@@ -578,7 +607,7 @@ local function runRound()
 		end
 	end
 
-	broadcastStatus("RoundStart", { aliveCount = countAlive() })
+	broadcastStatus("RoundStart", { aliveCount = countAlive(), mapName = MAP_NAMES[mapKey] or mapKey })
 
 	while roundActive and countAlive() > 1 do
 		task.wait(1)

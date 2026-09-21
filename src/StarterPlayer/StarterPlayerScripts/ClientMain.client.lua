@@ -118,8 +118,12 @@ local function getAimPoint()
 	return origin + direction
 end
 
--- Builds one grenade button: click or press `key` to throw, shows a live
--- cooldown countdown on the button itself while it's recharging.
+local GRENADE_MAX_CHARGE_TIME = 1.2 -- seconds held to reach full throw distance
+local GRENADE_MIN_CHARGE_FRACTION = 0.2 -- a quick tap still throws it this far
+
+-- Builds one grenade button: hold click or `key` down to charge up the
+-- throw distance (a quick tap still throws a short distance), release to
+-- throw. Shows a live cooldown countdown on the button while recharging.
 local function createGrenadeButton(config)
 	local button = Instance.new("TextButton")
 	button.Size = UDim2.new(0, 150, 0, 60)
@@ -133,26 +137,65 @@ local function createGrenadeButton(config)
 
 	local ready = true
 	local cooldownConn
+	local charging = false
+	local chargeStartTime = 0
+	local chargeConn
 
-	local function useAbility()
-		if not ready then
+	local function startCharge()
+		if not ready or charging then
 			return
 		end
-		config.throwRemote:FireServer(getAimPoint())
+		charging = true
+		chargeStartTime = os.clock()
+		if chargeConn then
+			chargeConn:Disconnect()
+		end
+		chargeConn = RunService.Heartbeat:Connect(function()
+			local fraction = math.clamp((os.clock() - chargeStartTime) / GRENADE_MAX_CHARGE_TIME, 0, 1)
+			button.Text = string.format("%d%%", math.floor(fraction * 100))
+			button.BackgroundColor3 = config.color:Lerp(Color3.new(1, 1, 1), fraction * 0.5)
+		end)
 	end
 
-	button.MouseButton1Click:Connect(useAbility)
+	local function releaseCharge()
+		if not charging then
+			return
+		end
+		charging = false
+		if chargeConn then
+			chargeConn:Disconnect()
+			chargeConn = nil
+		end
+		local fraction =
+			math.clamp((os.clock() - chargeStartTime) / GRENADE_MAX_CHARGE_TIME, GRENADE_MIN_CHARGE_FRACTION, 1)
+		button.Text = config.label
+		button.BackgroundColor3 = config.color
+		config.throwRemote:FireServer(getAimPoint(), fraction)
+	end
+
+	button.MouseButton1Down:Connect(startCharge)
+	button.MouseButton1Up:Connect(releaseCharge)
 	UserInputService.InputBegan:Connect(function(input, processedByUI)
 		if processedByUI then
 			return
 		end
 		if input.KeyCode == config.key then
-			useAbility()
+			startCharge()
+		end
+	end)
+	UserInputService.InputEnded:Connect(function(input)
+		if input.KeyCode == config.key then
+			releaseCharge()
 		end
 	end)
 
 	config.cooldownRemote.OnClientEvent:Connect(function(cooldown)
 		ready = false
+		charging = false
+		if chargeConn then
+			chargeConn:Disconnect()
+			chargeConn = nil
+		end
 		button.BackgroundColor3 = Color3.fromRGB(90, 90, 90)
 		if cooldownConn then
 			cooldownConn:Disconnect()
@@ -209,14 +252,27 @@ flashOverlay.BackgroundTransparency = 1
 flashOverlay.ZIndex = 10
 flashOverlay.Parent = screenGui
 
+local FLASH_HOLD_FRACTION = 0.55 -- fraction of the duration spent fully blind before fading
+local activeFlashTween
+
 FlashbangEffect.OnClientEvent:Connect(function(duration)
+	if activeFlashTween then
+		activeFlashTween:Cancel()
+		activeFlashTween = nil
+	end
+
 	flashOverlay.BackgroundTransparency = 0
-	local tween = TweenService:Create(
-		flashOverlay,
-		TweenInfo.new(duration, Enum.EasingStyle.Quad),
-		{ BackgroundTransparency = 1 }
-	)
-	tween:Play()
+	local holdTime = duration * FLASH_HOLD_FRACTION
+	local fadeTime = math.max(duration - holdTime, 0.05)
+
+	task.delay(holdTime, function()
+		activeFlashTween = TweenService:Create(
+			flashOverlay,
+			TweenInfo.new(fadeTime, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
+			{ BackgroundTransparency = 1 }
+		)
+		activeFlashTween:Play()
+	end)
 end)
 
 -- EMP effect: jams the guess box so you can't submit codes for a bit.
@@ -279,9 +335,9 @@ end
 
 PlayerEliminated.OnClientEvent:Connect(function(reason)
 	if reason == "cracked" then
-		showBanner("YOUR CODE WAS CRACKED — YOU'RE OUT", Color3.fromRGB(255, 80, 80))
+		showBanner("YOUR CODE WAS CRACKED. YOU'RE OUT.", Color3.fromRGB(255, 80, 80))
 	elseif reason == "wrong-guess" then
-		showBanner("WRONG CODE — YOU'RE OUT", Color3.fromRGB(255, 80, 80))
+		showBanner("WRONG CODE. YOU'RE OUT.", Color3.fromRGB(255, 80, 80))
 	else
 		showBanner("YOU'RE OUT", Color3.fromRGB(255, 80, 80))
 	end
@@ -290,6 +346,17 @@ end)
 local countdownConn
 
 RoundStatus.OnClientEvent:Connect(function(status, data)
+	-- Doesn't own the status bar, so it must not touch the countdown that
+	-- may currently be running (e.g. a map pin bought mid-intermission).
+	if status == "MapPinned" then
+		showBanner(
+			string.format("%s LOCKED IN %s FOR NEXT ROUND", data.by:upper(), data.mapName:upper()),
+			Color3.fromRGB(120, 190, 255),
+			4
+		)
+		return
+	end
+
 	if countdownConn then
 		countdownConn:Disconnect()
 		countdownConn = nil
@@ -304,9 +371,9 @@ RoundStatus.OnClientEvent:Connect(function(status, data)
 			statusLabel.Text = string.format("Next round starting in %ds", remaining)
 		end)
 	elseif status == "RoundStart" then
-		statusLabel.Text = string.format("FIGHT! %d players alive", data.aliveCount)
+		statusLabel.Text = string.format("FIGHT on %s! %d players alive", data.mapName, data.aliveCount)
 	elseif status == "PlayerDown" then
-		statusLabel.Text = string.format("%s is out (%s) — %d left", data.name, data.reason, data.aliveCount)
+		statusLabel.Text = string.format("%s is out (%s), %d left", data.name, data.reason, data.aliveCount)
 	elseif status == "RoundEnd" then
 		if data.winner then
 			statusLabel.Text = data.winner .. " WINS THE ROUND!"

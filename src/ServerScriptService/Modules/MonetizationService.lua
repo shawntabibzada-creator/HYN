@@ -14,6 +14,9 @@ local ownershipCache = {} -- [Player] = { [passKey] = true }
 local extraFlashbangSignal = Instance.new("BindableEvent")
 MonetizationService.ExtraFlashbangGranted = extraFlashbangSignal.Event
 
+local mapPinnedSignal = Instance.new("BindableEvent")
+MonetizationService.MapPinned = mapPinnedSignal.Event
+
 local function findPassById(id)
 	for _, pass in ipairs(ShopConfig.GamePasses) do
 		if pass.id == id then
@@ -75,8 +78,12 @@ MarketplaceService.ProcessReceipt = function(receiptInfo)
 	end
 
 	local product = findProductById(receiptInfo.ProductId)
-	if product and product.key == "ExtraFlashbang" then
-		extraFlashbangSignal:Fire(player)
+	if product then
+		if product.key == "ExtraFlashbang" then
+			extraFlashbangSignal:Fire(player)
+		elseif product.mapKey then
+			mapPinnedSignal:Fire(player, product.mapKey)
+		end
 	end
 
 	return Enum.ProductPurchaseDecision.PurchaseGranted
