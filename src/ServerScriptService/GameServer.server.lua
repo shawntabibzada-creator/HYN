@@ -254,18 +254,19 @@ local function hasLineOfSight(fromPos, toPos)
 end
 
 -- Clamps the aim point to throwRange from the thrower. Returns a spawn
--- origin nudged forward off the thrower's shoulder (so the grenade doesn't
--- spawn inside their own hitbox and immediately collide with them) and the
--- clamped target the arc should aim for.
-local function computeThrowTarget(hrp, aimPoint, throwRange)
+-- Builds a target exactly throwRange studs out along aimDirection (already
+-- scaled by the charge fraction by the caller) - not wherever a raycast
+-- happens to hit nearby, so a fully charged throw always goes the full
+-- distance regardless of what's directly in your crosshair. Also returns
+-- a spawn origin nudged forward off the thrower's shoulder so the grenade
+-- doesn't spawn inside their own hitbox and immediately collide with them.
+local function computeThrowTarget(hrp, aimDirection, throwRange)
 	local shoulder = hrp.Position + Vector3.new(0, 1.5, 0)
-	local toTarget = aimPoint - shoulder
-	if toTarget.Magnitude > throwRange then
-		toTarget = toTarget.Unit * throwRange
-	end
-	local landingTarget = shoulder + toTarget
+	local dirUnit = (typeof(aimDirection) == "Vector3" and aimDirection.Magnitude > 0.001) and aimDirection.Unit
+		or hrp.CFrame.LookVector
+	local landingTarget = shoulder + dirUnit * throwRange
 
-	local horizontalDir = Vector3.new(toTarget.X, 0, toTarget.Z)
+	local horizontalDir = Vector3.new(dirUnit.X, 0, dirUnit.Z)
 	horizontalDir = horizontalDir.Magnitude > 0.001 and horizontalDir.Unit or hrp.CFrame.LookVector
 	local origin = shoulder + horizontalDir * 3
 
@@ -363,8 +364,8 @@ local function tryStartCooldown(readyAtTable, player, cooldown, cooldownRemote)
 	return true
 end
 
-ThrowFlashbang.OnServerEvent:Connect(function(player, aimPoint, chargeFraction)
-	if not roundActive or not aliveSet[player] or typeof(aimPoint) ~= "Vector3" then
+ThrowFlashbang.OnServerEvent:Connect(function(player, aimDirection, chargeFraction)
+	if not roundActive or not aliveSet[player] or typeof(aimDirection) ~= "Vector3" then
 		return
 	end
 
@@ -381,7 +382,7 @@ ThrowFlashbang.OnServerEvent:Connect(function(player, aimPoint, chargeFraction)
 	end
 
 	local throwRange = FLASHBANG_THROW_RANGE * clampChargeFraction(chargeFraction)
-	local origin, landingTarget = computeThrowTarget(hrp, aimPoint, throwRange)
+	local origin, landingTarget = computeThrowTarget(hrp, aimDirection, throwRange)
 	local velocity = computeArcVelocity(origin, landingTarget)
 	local grenade = spawnGrenadeProjectile("FlashbangGrenade", origin, velocity, Color3.fromRGB(255, 255, 255))
 
@@ -418,8 +419,8 @@ ThrowFlashbang.OnServerEvent:Connect(function(player, aimPoint, chargeFraction)
 	end)
 end)
 
-ThrowEMP.OnServerEvent:Connect(function(player, aimPoint, chargeFraction)
-	if not roundActive or not aliveSet[player] or typeof(aimPoint) ~= "Vector3" then
+ThrowEMP.OnServerEvent:Connect(function(player, aimDirection, chargeFraction)
+	if not roundActive or not aliveSet[player] or typeof(aimDirection) ~= "Vector3" then
 		return
 	end
 	if not tryStartCooldown(empReadyAt, player, EMP_COOLDOWN, EMPCooldownRemote) then
@@ -433,7 +434,7 @@ ThrowEMP.OnServerEvent:Connect(function(player, aimPoint, chargeFraction)
 	end
 
 	local throwRange = EMP_THROW_RANGE * clampChargeFraction(chargeFraction)
-	local origin, landingTarget = computeThrowTarget(hrp, aimPoint, throwRange)
+	local origin, landingTarget = computeThrowTarget(hrp, aimDirection, throwRange)
 	local velocity = computeArcVelocity(origin, landingTarget)
 	local grenade = spawnGrenadeProjectile("EMPGrenade", origin, velocity, Color3.fromRGB(120, 190, 255))
 
@@ -475,8 +476,8 @@ local function applyStun(player, humanoid)
 	end)
 end
 
-ThrowStun.OnServerEvent:Connect(function(player, aimPoint, chargeFraction)
-	if not roundActive or not aliveSet[player] or typeof(aimPoint) ~= "Vector3" then
+ThrowStun.OnServerEvent:Connect(function(player, aimDirection, chargeFraction)
+	if not roundActive or not aliveSet[player] or typeof(aimDirection) ~= "Vector3" then
 		return
 	end
 	if not tryStartCooldown(stunReadyAt, player, STUN_COOLDOWN, StunCooldownRemote) then
@@ -490,7 +491,7 @@ ThrowStun.OnServerEvent:Connect(function(player, aimPoint, chargeFraction)
 	end
 
 	local throwRange = STUN_THROW_RANGE * clampChargeFraction(chargeFraction)
-	local origin, landingTarget = computeThrowTarget(hrp, aimPoint, throwRange)
+	local origin, landingTarget = computeThrowTarget(hrp, aimDirection, throwRange)
 	local velocity = computeArcVelocity(origin, landingTarget)
 	local grenade = spawnGrenadeProjectile("StunGrenade", origin, velocity, Color3.fromRGB(255, 165, 40))
 

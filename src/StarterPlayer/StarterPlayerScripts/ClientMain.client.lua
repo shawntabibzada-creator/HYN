@@ -24,8 +24,6 @@ local StunCooldownRemote = Remotes:WaitForChild("StunCooldown")
 local PlayerEliminated = Remotes:WaitForChild("PlayerEliminated")
 local RoundStatus = Remotes:WaitForChild("RoundStatus")
 
-local GRENADE_THROW_RANGE = 225
-
 local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "CodeDuelUI"
 screenGui.ResetOnSpawn = false
@@ -101,21 +99,13 @@ guessBox.FocusLost:Connect(function(enterPressed)
 	end
 end)
 
-local function getAimPoint()
-	local camera = workspace.CurrentCamera
-	local character = player.Character
-	local origin = camera.CFrame.Position
-	local direction = camera.CFrame.LookVector * GRENADE_THROW_RANGE
-
-	local raycastParams = RaycastParams.new()
-	raycastParams.FilterType = Enum.RaycastFilterType.Exclude
-	raycastParams.FilterDescendantsInstances = character and { character } or {}
-
-	local result = workspace:Raycast(origin, direction, raycastParams)
-	if result then
-		return result.Position
-	end
-	return origin + direction
+-- Just the camera's facing direction. The server scales this by the
+-- charge fraction to get the actual throw distance - no raycast here,
+-- since a nearby wall/floor in your crosshair shouldn't cap a fully
+-- charged throw short (the grenade's own physics handles bouncing off
+-- whatever it actually hits along the way).
+local function getAimDirection()
+	return workspace.CurrentCamera.CFrame.LookVector
 end
 
 local GRENADE_MAX_CHARGE_TIME = 1.2 -- seconds held to reach full throw distance
@@ -170,7 +160,7 @@ local function createGrenadeButton(config)
 			math.clamp((os.clock() - chargeStartTime) / GRENADE_MAX_CHARGE_TIME, GRENADE_MIN_CHARGE_FRACTION, 1)
 		button.Text = config.label
 		button.BackgroundColor3 = config.color
-		config.throwRemote:FireServer(getAimPoint(), fraction)
+		config.throwRemote:FireServer(getAimDirection(), fraction)
 	end
 
 	button.MouseButton1Down:Connect(startCharge)
