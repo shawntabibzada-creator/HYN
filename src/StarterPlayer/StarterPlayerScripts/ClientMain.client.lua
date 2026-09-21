@@ -29,6 +29,21 @@ local BountyClaimed = Remotes:WaitForChild("BountyClaimed")
 local PlayerEliminated = Remotes:WaitForChild("PlayerEliminated")
 local RoundStatus = Remotes:WaitForChild("RoundStatus")
 
+-- Maps gamepad buttons used as shortcuts to their on-screen names, and a
+-- helper so button labels show the right hint for whichever input method
+-- (keyboard vs gamepad) was used most recently.
+local GAMEPAD_BUTTON_NAMES = {
+	[Enum.KeyCode.ButtonR1] = "RB",
+	[Enum.KeyCode.ButtonL1] = "LB",
+	[Enum.KeyCode.ButtonY] = "Y",
+	[Enum.KeyCode.ButtonX] = "X",
+	[Enum.KeyCode.ButtonR2] = "RT",
+}
+
+local function isGamepadInput()
+	return UserInputService:GetLastInputType() == Enum.UserInputType.Gamepad1
+end
+
 local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "CodeDuelUI"
 screenGui.ResetOnSpawn = false
@@ -97,12 +112,33 @@ local function submitGuess()
 	end
 end
 
+-- Idle button text only; while jammed the EMP handler owns it.
+local function updateSubmitIdleLabel()
+	if os.clock() >= guessBlockedUntil then
+		submitButton.Text = isGamepadInput() and "SUBMIT (RT)" or "SUBMIT (Enter)"
+	end
+end
+
 submitButton.MouseButton1Click:Connect(submitGuess)
 guessBox.FocusLost:Connect(function(enterPressed)
 	if enterPressed then
 		submitGuess()
 	end
 end)
+UserInputService.LastInputTypeChanged:Connect(updateSubmitIdleLabel)
+
+-- Gamepads can't click a TextBox, so a trigger press opens it directly;
+-- Roblox brings up the platform's on-screen keyboard once it has focus.
+UserInputService.InputBegan:Connect(function(input, processedByUI)
+	if processedByUI then
+		return
+	end
+	if input.KeyCode == Enum.KeyCode.ButtonR2 and guessBox.TextEditable then
+		guessBox:CaptureFocus()
+	end
+end)
+
+updateSubmitIdleLabel()
 
 -- Just the camera's facing direction. The server scales this by the
 -- charge fraction to get the actual throw distance - no raycast here,
@@ -120,10 +156,16 @@ local GRENADE_MIN_CHARGE_FRACTION = 0.2 -- a quick tap still throws it this far
 -- throw distance (a quick tap still throws a short distance), release to
 -- throw. Shows a live cooldown countdown on the button while recharging.
 local function createGrenadeButton(config)
+	local function baseLabel()
+		local hint = (isGamepadInput() and config.gamepadKey) and GAMEPAD_BUTTON_NAMES[config.gamepadKey]
+			or config.keyName
+		return string.format("%s (%s)", config.name, hint)
+	end
+
 	local button = Instance.new("TextButton")
 	button.Size = UDim2.new(0, 150, 0, 60)
 	button.Position = config.position
-	button.Text = config.label
+	button.Text = baseLabel()
 	button.TextScaled = true
 	button.Font = Enum.Font.GothamBold
 	button.BackgroundColor3 = config.color
@@ -163,7 +205,7 @@ local function createGrenadeButton(config)
 		end
 		local fraction =
 			math.clamp((os.clock() - chargeStartTime) / GRENADE_MAX_CHARGE_TIME, GRENADE_MIN_CHARGE_FRACTION, 1)
-		button.Text = config.label
+		button.Text = baseLabel()
 		button.BackgroundColor3 = config.color
 		config.throwRemote:FireServer(getAimDirection(), fraction)
 	end
@@ -174,13 +216,18 @@ local function createGrenadeButton(config)
 		if processedByUI then
 			return
 		end
-		if input.KeyCode == config.key then
+		if input.KeyCode == config.key or (config.gamepadKey and input.KeyCode == config.gamepadKey) then
 			startCharge()
 		end
 	end)
 	UserInputService.InputEnded:Connect(function(input)
-		if input.KeyCode == config.key then
+		if input.KeyCode == config.key or (config.gamepadKey and input.KeyCode == config.gamepadKey) then
 			releaseCharge()
+		end
+	end)
+	UserInputService.LastInputTypeChanged:Connect(function()
+		if ready and not charging then
+			button.Text = baseLabel()
 		end
 	end)
 
@@ -200,7 +247,7 @@ local function createGrenadeButton(config)
 		cooldownConn = RunService.Heartbeat:Connect(function()
 			local remaining = endTime - os.clock()
 			if remaining <= 0 then
-				button.Text = config.label
+				button.Text = baseLabel()
 				button.BackgroundColor3 = config.color
 				ready = true
 				cooldownConn:Disconnect()
@@ -214,36 +261,44 @@ end
 
 createGrenadeButton({
 	position = UDim2.new(1, -170, 1, -80),
-	label = "FLASHBANG (F)",
+	name = "FLASHBANG",
+	keyName = "F",
 	color = Color3.fromRGB(60, 140, 220),
 	key = Enum.KeyCode.F,
+	gamepadKey = Enum.KeyCode.ButtonR1,
 	throwRemote = ThrowFlashbang,
 	cooldownRemote = FlashbangCooldownRemote,
 })
 
 createGrenadeButton({
 	position = UDim2.new(1, -170, 1, -150),
-	label = "EMP (G)",
+	name = "EMP",
+	keyName = "G",
 	color = Color3.fromRGB(120, 90, 220),
 	key = Enum.KeyCode.G,
+	gamepadKey = Enum.KeyCode.ButtonL1,
 	throwRemote = ThrowEMP,
 	cooldownRemote = EMPCooldownRemote,
 })
 
 createGrenadeButton({
 	position = UDim2.new(1, -170, 1, -220),
-	label = "STUN (H)",
+	name = "STUN",
+	keyName = "H",
 	color = Color3.fromRGB(230, 140, 40),
 	key = Enum.KeyCode.H,
+	gamepadKey = Enum.KeyCode.ButtonY,
 	throwRemote = ThrowStun,
 	cooldownRemote = StunCooldownRemote,
 })
 
 createGrenadeButton({
 	position = UDim2.new(1, -170, 1, -290),
-	label = "SCANNER (J)",
+	name = "SCANNER",
+	keyName = "J",
 	color = Color3.fromRGB(80, 220, 170),
 	key = Enum.KeyCode.J,
+	gamepadKey = Enum.KeyCode.ButtonX,
 	throwRemote = ThrowScanner,
 	cooldownRemote = ScannerCooldownRemote,
 })
@@ -293,7 +348,7 @@ EMPEffect.OnClientEvent:Connect(function(duration)
 		if os.clock() >= guessBlockedUntil then
 			guessBox.TextEditable = true
 			guessBox.PlaceholderText = "Enter 4-digit code"
-			submitButton.Text = "SUBMIT (Enter)"
+			updateSubmitIdleLabel()
 			submitButton.AutoButtonColor = true
 			submitButton.BackgroundColor3 = Color3.fromRGB(200, 60, 60)
 		end
