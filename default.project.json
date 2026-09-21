@@ -1,0 +1,42 @@
+{
+  "name": "CodeDuel",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "$className": "ReplicatedStorage",
+      "Modules": {
+        "$path": "src/ReplicatedStorage/Modules"
+      },
+      "Remotes": {
+        "$className": "Folder",
+        "SubmitCodeGuess": {
+          "$className": "RemoteEvent"
+        },
+        "ThrowFlashbang": {
+          "$className": "RemoteEvent"
+        },
+        "FlashbangEffect": {
+          "$className": "RemoteEvent"
+        },
+        "FlashbangCooldown": {
+          "$className": "RemoteEvent"
+        },
+        "PlayerEliminated": {
+          "$className": "RemoteEvent"
+        },
+        "RoundStatus": {
+          "$className": "RemoteEvent"
+        }
+      }
+    },
+    "ServerScriptService": {
+      "$path": "src/ServerScriptService"
+    },
+    "StarterPlayer": {
+      "$className": "StarterPlayer",
+      "StarterPlayerScripts": {
+        "$path": "src/StarterPlayer/StarterPlayerScripts"
+      }
+    }
+  }
+}
