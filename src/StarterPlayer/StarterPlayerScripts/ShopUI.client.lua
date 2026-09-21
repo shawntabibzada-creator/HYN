@@ -14,7 +14,7 @@ local screenGui = playerGui:WaitForChild("CodeDuelUI")
 
 local shopButton = Instance.new("TextButton")
 shopButton.Size = UDim2.new(0, 90, 0, 36)
-shopButton.Position = UDim2.new(0, 10, 0, 10)
+shopButton.Position = UDim2.new(0, 10, 1, -100)
 shopButton.Text = "SHOP"
 shopButton.Font = Enum.Font.GothamBold
 shopButton.TextScaled = true
