@@ -217,7 +217,9 @@ RoundStatus.OnClientEvent:Connect(function(status, data)
 		countdownConn = nil
 	end
 
-	if status == "Intermission" then
+	if status == "Waiting" then
+		statusLabel.Text = string.format("Waiting for players... (%d/%d)", data.count, data.needed)
+	elseif status == "Intermission" then
 		local endTime = os.clock() + data.seconds
 		countdownConn = RunService.Heartbeat:Connect(function()
 			local remaining = math.max(0, math.ceil(endTime - os.clock()))

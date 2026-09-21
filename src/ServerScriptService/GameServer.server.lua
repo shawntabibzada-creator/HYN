@@ -351,6 +351,7 @@ end
 local function runRound()
 	local players = Players:GetPlayers()
 	if #players < MIN_PLAYERS then
+		broadcastStatus("Waiting", { count = #players, needed = MIN_PLAYERS })
 		return
 	end
 
