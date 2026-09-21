@@ -1,7 +1,8 @@
 -- Shop panel: lists the game passes and developer products from
--- ShopConfig and prompts a real Roblox purchase when clicked. Items whose
--- id is still the 0 placeholder show as "not set up yet" instead of
--- prompting, since Roblox would reject a purchase for id 0.
+-- ShopConfig, split into a Gear tab and a Cosmetics tab, and prompts a
+-- real Roblox purchase when clicked. Items whose id is still the 0
+-- placeholder show as "not set up yet" instead of prompting, since Roblox
+-- would reject a purchase for id 0.
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local MarketplaceService = game:GetService("MarketplaceService")
@@ -11,6 +12,35 @@ local ShopConfig = require(ReplicatedStorage.Modules.ShopConfig)
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 local screenGui = playerGui:WaitForChild("CodeDuelUI")
+
+-- Flatten both lists into one, each tagged with a tab and a buy action.
+local allItems = {}
+for _, pass in ipairs(ShopConfig.GamePasses) do
+	table.insert(allItems, {
+		tab = pass.kind == "Cosmetic" and "Cosmetics" or "Gear",
+		kind = pass.kind,
+		name = pass.name,
+		description = pass.description,
+		priceRobux = pass.priceRobux,
+		configured = pass.id ~= 0,
+		onBuy = function()
+			MarketplaceService:PromptGamePassPurchase(player, pass.id)
+		end,
+	})
+end
+for _, product in ipairs(ShopConfig.DeveloperProducts) do
+	table.insert(allItems, {
+		tab = product.kind == "Cosmetic" and "Cosmetics" or "Gear",
+		kind = product.kind,
+		name = product.name,
+		description = product.description,
+		priceRobux = product.priceRobux,
+		configured = product.id ~= 0,
+		onBuy = function()
+			MarketplaceService:PromptProductPurchase(player, product.id)
+		end,
+	})
+end
 
 local shopButton = Instance.new("TextButton")
 shopButton.Size = UDim2.new(0, 90, 0, 36)
@@ -24,8 +54,8 @@ shopButton.ZIndex = 5
 shopButton.Parent = screenGui
 
 local shopFrame = Instance.new("Frame")
-shopFrame.Size = UDim2.new(0, 360, 0, 420)
-shopFrame.Position = UDim2.new(0.5, -180, 0.5, -210)
+shopFrame.Size = UDim2.new(0, 360, 0, 440)
+shopFrame.Position = UDim2.new(0.5, -180, 0.5, -220)
 shopFrame.BackgroundColor3 = Color3.fromRGB(24, 24, 27)
 shopFrame.BackgroundTransparency = 0.05
 shopFrame.Visible = false
@@ -53,9 +83,32 @@ closeButton.TextColor3 = Color3.new(1, 1, 1)
 closeButton.ZIndex = 7
 closeButton.Parent = shopFrame
 
+-- Tab bar
+local tabBar = Instance.new("Frame")
+tabBar.Size = UDim2.new(1, -12, 0, 34)
+tabBar.Position = UDim2.new(0, 6, 0, 44)
+tabBar.BackgroundTransparency = 1
+tabBar.ZIndex = 6
+tabBar.Parent = shopFrame
+
+local function createTabButton(text, position)
+	local button = Instance.new("TextButton")
+	button.Size = UDim2.new(0.5, -3, 1, 0)
+	button.Position = position
+	button.Text = text
+	button.Font = Enum.Font.GothamBold
+	button.TextScaled = true
+	button.ZIndex = 6
+	button.Parent = tabBar
+	return button
+end
+
+local gearTabButton = createTabButton("GEAR", UDim2.new(0, 0, 0, 0))
+local cosmeticsTabButton = createTabButton("COSMETICS", UDim2.new(0.5, 3, 0, 0))
+
 local scrollFrame = Instance.new("ScrollingFrame")
-scrollFrame.Size = UDim2.new(1, -12, 1, -50)
-scrollFrame.Position = UDim2.new(0, 6, 0, 46)
+scrollFrame.Size = UDim2.new(1, -12, 1, -88)
+scrollFrame.Position = UDim2.new(0, 6, 0, 84)
 scrollFrame.BackgroundTransparency = 1
 scrollFrame.BorderSizePixel = 0
 scrollFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
@@ -76,7 +129,7 @@ closeButton.MouseButton1Click:Connect(function()
 	shopFrame.Visible = false
 end)
 
-local function addEntry(kind, name, description, priceRobux, onBuy, configured)
+local function addEntry(item)
 	local entry = Instance.new("Frame")
 	entry.Size = UDim2.new(1, -6, 0, 84)
 	entry.BackgroundColor3 = Color3.fromRGB(34, 34, 38)
@@ -87,7 +140,7 @@ local function addEntry(kind, name, description, priceRobux, onBuy, configured)
 	kindLabel.Size = UDim2.new(0.6, 0, 0, 18)
 	kindLabel.Position = UDim2.new(0, 8, 0, 4)
 	kindLabel.BackgroundTransparency = 1
-	kindLabel.Text = kind
+	kindLabel.Text = item.kind
 	kindLabel.Font = Enum.Font.Gotham
 	kindLabel.TextScaled = true
 	kindLabel.TextXAlignment = Enum.TextXAlignment.Left
@@ -99,7 +152,7 @@ local function addEntry(kind, name, description, priceRobux, onBuy, configured)
 	nameLabel.Size = UDim2.new(0.6, 0, 0, 22)
 	nameLabel.Position = UDim2.new(0, 8, 0, 20)
 	nameLabel.BackgroundTransparency = 1
-	nameLabel.Text = name
+	nameLabel.Text = item.name
 	nameLabel.Font = Enum.Font.GothamBold
 	nameLabel.TextScaled = true
 	nameLabel.TextXAlignment = Enum.TextXAlignment.Left
@@ -111,7 +164,7 @@ local function addEntry(kind, name, description, priceRobux, onBuy, configured)
 	descLabel.Size = UDim2.new(0.6, 0, 0, 36)
 	descLabel.Position = UDim2.new(0, 8, 0, 44)
 	descLabel.BackgroundTransparency = 1
-	descLabel.Text = description
+	descLabel.Text = item.description
 	descLabel.Font = Enum.Font.Gotham
 	descLabel.TextScaled = true
 	descLabel.TextWrapped = true
@@ -129,27 +182,44 @@ local function addEntry(kind, name, description, priceRobux, onBuy, configured)
 	buyButton.ZIndex = 6
 	buyButton.Parent = entry
 
-	if configured then
-		buyButton.Text = string.format("BUY\n%d R$", priceRobux)
+	if item.configured then
+		buyButton.Text = string.format("BUY\n%d R$", item.priceRobux)
 		buyButton.BackgroundColor3 = Color3.fromRGB(80, 170, 90)
 		buyButton.TextColor3 = Color3.new(1, 1, 1)
-		buyButton.MouseButton1Click:Connect(onBuy)
+		buyButton.MouseButton1Click:Connect(item.onBuy)
 	else
-		buyButton.Text = string.format("NOT SET UP\n(%d R$)", priceRobux)
+		buyButton.Text = string.format("NOT SET UP\n(%d R$)", item.priceRobux)
 		buyButton.BackgroundColor3 = Color3.fromRGB(70, 70, 74)
 		buyButton.TextColor3 = Color3.fromRGB(180, 180, 180)
 		buyButton.AutoButtonColor = false
 	end
 end
 
-for _, pass in ipairs(ShopConfig.GamePasses) do
-	addEntry(pass.kind, pass.name, pass.description, pass.priceRobux, function()
-		MarketplaceService:PromptGamePassPurchase(player, pass.id)
-	end, pass.id ~= 0)
+local ACTIVE_TAB_COLOR = Color3.fromRGB(70, 160, 90)
+local INACTIVE_TAB_COLOR = Color3.fromRGB(50, 50, 55)
+
+local function showTab(tabName)
+	for _, child in ipairs(scrollFrame:GetChildren()) do
+		if child:IsA("Frame") then
+			child:Destroy()
+		end
+	end
+
+	for _, item in ipairs(allItems) do
+		if item.tab == tabName then
+			addEntry(item)
+		end
+	end
+
+	gearTabButton.BackgroundColor3 = tabName == "Gear" and ACTIVE_TAB_COLOR or INACTIVE_TAB_COLOR
+	cosmeticsTabButton.BackgroundColor3 = tabName == "Cosmetics" and ACTIVE_TAB_COLOR or INACTIVE_TAB_COLOR
 end
 
-for _, product in ipairs(ShopConfig.DeveloperProducts) do
-	addEntry(product.kind, product.name, product.description, product.priceRobux, function()
-		MarketplaceService:PromptProductPurchase(player, product.id)
-	end, product.id ~= 0)
-end
+gearTabButton.MouseButton1Click:Connect(function()
+	showTab("Gear")
+end)
+cosmeticsTabButton.MouseButton1Click:Connect(function()
+	showTab("Cosmetics")
+end)
+
+showTab("Gear")
