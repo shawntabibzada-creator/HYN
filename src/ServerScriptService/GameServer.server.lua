@@ -30,8 +30,9 @@ local FAST_FLASHBANG_COOLDOWN = 4 -- with the "Quick Fuse" game pass
 local FLASHBANG_RADIUS = 40
 local FLASHBANG_MAX_DURATION = 3 -- at the center of the blast
 local FLASHBANG_MIN_DURATION = 0.5 -- at the edge of the radius
-local FLASHBANG_THROW_RANGE = 60
-local FLASHBANG_FLIGHT_TIME = 0.5
+local FLASHBANG_THROW_RANGE = 90
+local FLASHBANG_THROW_SPEED = 110 -- studs per second, sets how long it's in the air
+local FLASHBANG_MIN_FLIGHT_TIME = 0.15
 local SPECTATOR_POSITION = Vector3.new(0, 300, 0)
 
 local SIGN_COLORS = {
@@ -191,6 +192,25 @@ SubmitCodeGuess.OnServerEvent:Connect(function(player, guessedCode)
 	end
 end)
 
+-- True if nothing in the map (walls, roofs, crates, boundary) sits between
+-- the two points. Characters themselves are excluded so a crowd of players
+-- never blocks the check.
+local function hasLineOfSight(fromPos, toPos)
+	local raycastParams = RaycastParams.new()
+	raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+	local excluded = {}
+	for _, plr in ipairs(Players:GetPlayers()) do
+		if plr.Character then
+			table.insert(excluded, plr.Character)
+		end
+	end
+	raycastParams.FilterDescendantsInstances = excluded
+
+	local direction = toPos - fromPos
+	local result = Workspace:Raycast(fromPos, direction, raycastParams)
+	return result == nil
+end
+
 ThrowFlashbang.OnServerEvent:Connect(function(player, aimPoint)
 	if not roundActive or not aliveSet[player] then
 		return
@@ -221,25 +241,52 @@ ThrowFlashbang.OnServerEvent:Connect(function(player, aimPoint)
 	end
 	local landingPoint = origin + toTarget
 
+	local flightTime = math.max(toTarget.Magnitude / FLASHBANG_THROW_SPEED, FLASHBANG_MIN_FLIGHT_TIME)
+
 	local grenade = Instance.new("Part")
 	grenade.Name = "FlashbangGrenade"
 	grenade.Shape = Enum.PartType.Ball
-	grenade.Size = Vector3.new(0.8, 0.8, 0.8)
-	grenade.Color = Color3.fromRGB(85, 95, 85)
-	grenade.Material = Enum.Material.Metal
+	grenade.Size = Vector3.new(1.4, 1.4, 1.4)
+	grenade.Color = Color3.fromRGB(255, 255, 255)
+	grenade.Material = Enum.Material.Neon
 	grenade.Anchored = true
 	grenade.CanCollide = false
 	grenade.Position = origin
 	grenade.Parent = Workspace
 
+	local glow = Instance.new("PointLight")
+	glow.Color = Color3.fromRGB(255, 255, 255)
+	glow.Range = 14
+	glow.Brightness = 3
+	glow.Parent = grenade
+
+	local attachmentTop = Instance.new("Attachment")
+	attachmentTop.Position = Vector3.new(0, 0.3, 0)
+	attachmentTop.Parent = grenade
+	local attachmentBottom = Instance.new("Attachment")
+	attachmentBottom.Position = Vector3.new(0, -0.3, 0)
+	attachmentBottom.Parent = grenade
+
+	local trail = Instance.new("Trail")
+	trail.Attachment0 = attachmentTop
+	trail.Attachment1 = attachmentBottom
+	trail.Lifetime = 0.35
+	trail.Color = ColorSequence.new(Color3.fromRGB(255, 255, 255))
+	trail.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.2),
+		NumberSequenceKeypoint.new(1, 1),
+	})
+	trail.WidthScale = NumberSequence.new(1, 0)
+	trail.Parent = grenade
+
 	local tween = TweenService:Create(
 		grenade,
-		TweenInfo.new(FLASHBANG_FLIGHT_TIME, Enum.EasingStyle.Linear),
+		TweenInfo.new(flightTime, Enum.EasingStyle.Linear),
 		{ Position = landingPoint }
 	)
 	tween:Play()
 
-	task.delay(FLASHBANG_FLIGHT_TIME, function()
+	task.delay(flightTime, function()
 		grenade:Destroy()
 
 		for _, other in ipairs(Players:GetPlayers()) do
@@ -248,7 +295,7 @@ ThrowFlashbang.OnServerEvent:Connect(function(player, aimPoint)
 				local otherHrp = otherCharacter and otherCharacter:FindFirstChild("HumanoidRootPart")
 				if otherHrp then
 					local distance = (otherHrp.Position - landingPoint).Magnitude
-					if distance <= FLASHBANG_RADIUS then
+					if distance <= FLASHBANG_RADIUS and hasLineOfSight(landingPoint, otherHrp.Position) then
 						local closeness = 1 - (distance / FLASHBANG_RADIUS)
 						local duration = FLASHBANG_MIN_DURATION
 							+ (FLASHBANG_MAX_DURATION - FLASHBANG_MIN_DURATION) * closeness
