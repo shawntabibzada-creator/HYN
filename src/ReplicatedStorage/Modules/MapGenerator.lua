@@ -4,8 +4,11 @@
 --              + roof), a crate yard, or an open plaza, plus streetlights.
 --   Compound - ground-level cover plus several elevated platforms reached
 --              by ramps, for a map with real verticality.
---   Desert   - a big, mostly open sandy arena with sparse rock cover.
+--   Desert   - a big, completely open arena of rolling sand dunes (real
+--              Terrain, not props), so elevation itself is the only cover.
 local MapGenerator = {}
+
+local Workspace = game:GetService("Workspace")
 
 local function newPart(props)
 	local p = Instance.new("Part")
@@ -363,40 +366,57 @@ local function generateCompound(mapFolder)
 end
 
 --------------------------------------------------------------------------
--- Desert (open, minimal cover)
+-- Desert (open, rolling sand dunes via real Terrain - no props/cover)
 --------------------------------------------------------------------------
 
 local DESERT_ARENA_SIZE = 200
-local DESERT_BOUNDARY_HEIGHT = 20
+local DESERT_BOUNDARY_HEIGHT = 40
+local DESERT_CELL_SIZE = 10
+local DESERT_MAX_DUNE_HEIGHT = 16
+local DESERT_MIN_DUNE_HEIGHT = 2
+local DESERT_NOISE_SCALE = 0.035
+local DESERT_TERRAIN_FLOOR_Y = -12 -- how deep each terrain column's base sits
+
+local function duneHeightAt(x, z, seed)
+	local sample = (math.noise(x * DESERT_NOISE_SCALE, z * DESERT_NOISE_SCALE, seed) + 1) / 2
+	return DESERT_MIN_DUNE_HEIGHT + sample * (DESERT_MAX_DUNE_HEIGHT - DESERT_MIN_DUNE_HEIGHT)
+end
+
+-- Raycasts straight down against the terrain to find the actual dune
+-- surface height at (x, z), so spawn points land on the sand instead of
+-- floating above it or clipping into a dune.
+local function findTerrainSurfaceY(x, z)
+	local raycastParams = RaycastParams.new()
+	raycastParams.FilterType = Enum.RaycastFilterType.Include
+	raycastParams.FilterDescendantsInstances = { Workspace.Terrain }
+
+	local result = Workspace:Raycast(Vector3.new(x, 100, z), Vector3.new(0, -200, 0), raycastParams)
+	return result and result.Position.Y or 0
+end
 
 local function generateDesert(mapFolder)
 	local rng = Random.new()
 	local half = DESERT_ARENA_SIZE / 2
+	local seed = rng:NextNumber(0, 1000)
 
-	buildFloor(mapFolder, DESERT_ARENA_SIZE, Color3.fromRGB(194, 178, 128), Enum.Material.Sand)
 	buildBoundary(mapFolder, DESERT_ARENA_SIZE, DESERT_BOUNDARY_HEIGHT, Color3.fromRGB(150, 130, 95))
 
-	local clusterCount = rng:NextInteger(6, 10)
-	for _ = 1, clusterCount do
-		local clusterX = rng:NextNumber(-half + 14, half - 14)
-		local clusterZ = rng:NextNumber(-half + 14, half - 14)
-		local rockCount = rng:NextInteger(1, 3)
-		for _ = 1, rockCount do
-			local size = rng:NextNumber(5, 11)
-			local rock = newPart({
-				Name = "Rock",
-				Size = Vector3.new(size, size * rng:NextNumber(0.4, 0.7), size * rng:NextNumber(0.7, 1.1)),
-				Position = Vector3.new(clusterX + rng:NextNumber(-4, 4), size * 0.2, clusterZ + rng:NextNumber(-4, 4)),
-				Orientation = Vector3.new(0, rng:NextInteger(0, 359), 0),
-				Color = Color3.fromRGB(
-					rng:NextInteger(150, 180),
-					rng:NextInteger(130, 155),
-					rng:NextInteger(95, 115)
-				),
-				Material = Enum.Material.Sandstone,
-			})
-			rock.Parent = mapFolder
+	local terrain = Workspace.Terrain
+	local x = -half
+	while x < half do
+		local z = -half
+		while z < half do
+			local topY = duneHeightAt(x, z, seed)
+			local blockHeight = topY - DESERT_TERRAIN_FLOOR_Y
+			local centerY = (topY + DESERT_TERRAIN_FLOOR_Y) / 2
+			terrain:FillBlock(
+				CFrame.new(x + DESERT_CELL_SIZE / 2, centerY, z + DESERT_CELL_SIZE / 2),
+				Vector3.new(DESERT_CELL_SIZE, blockHeight, DESERT_CELL_SIZE),
+				Enum.Material.Sand
+			)
+			z += DESERT_CELL_SIZE
 		end
+		x += DESERT_CELL_SIZE
 	end
 
 	local spawnPoints = {}
@@ -404,7 +424,8 @@ local function generateDesert(mapFolder)
 	for i = 1, spawnCount do
 		local angle = (i / spawnCount) * math.pi * 2
 		local radius = half - 10
-		table.insert(spawnPoints, CFrame.new(math.cos(angle) * radius, 3, math.sin(angle) * radius))
+		local sx, sz = math.cos(angle) * radius, math.sin(angle) * radius
+		table.insert(spawnPoints, CFrame.new(sx, findTerrainSurfaceY(sx, sz) + 3, sz))
 	end
 
 	return spawnPoints
@@ -433,6 +454,12 @@ end
 
 function MapGenerator.Generate(mapKey, parent)
 	local generator = GENERATORS[mapKey] or generateTown
+
+	-- Terrain (the Desert map's dunes) lives outside any Folder we can
+	-- just destroy, so clear it unconditionally before every generation -
+	-- otherwise a previous Desert round's dunes would linger into a Town
+	-- or Compound round.
+	Workspace.Terrain:Clear()
 
 	local mapFolder = Instance.new("Folder")
 	mapFolder.Name = "GeneratedMap"
