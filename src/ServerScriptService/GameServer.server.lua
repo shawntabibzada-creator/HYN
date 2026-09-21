@@ -80,6 +80,8 @@ local SCANNER_RADIUS = 45 -- ignores walls/facing - a real information tool, not
 local SCANNER_REVEAL_DURATION = 0.3 -- a brief flash of the code, not a sustained reveal (below ~0.2s tends to render 0 frames)
 local SCANNER_THROW_RANGE = 150
 
+local VIP_COOLDOWN_MULTIPLIER = 0.7 -- with an active "VIP Day Pass"; stacks with Quick Fuse
+
 local BOUNTY_KILL_THRESHOLD = 2 -- round kills needed to become (or take over) the bounty
 local BOUNTY_KILL_BONUS = 1 -- extra Kills credit for claiming the bounty
 
@@ -99,7 +101,16 @@ local SIGN_COLORS = {
 	Default = Color3.fromRGB(255, 220, 90),
 	GoldSign = Color3.fromRGB(255, 200, 40),
 	CrimsonSign = Color3.fromRGB(230, 60, 60),
+	EmeraldSign = Color3.fromRGB(60, 220, 120),
+	VioletSign = Color3.fromRGB(170, 90, 230),
 }
+
+-- Checked in order; the first sign cosmetic a player owns wins, so the
+-- flashier/more expensive ones are listed first. RainbowSign isn't a
+-- static color (see attachCodeTag) so it's not in SIGN_COLORS.
+local SIGN_COSMETIC_PRIORITY = { "RainbowSign", "GoldSign", "CrimsonSign", "EmeraldSign", "VioletSign" }
+
+local NEON_TRAIL_COLOR = Color3.fromRGB(80, 220, 255)
 
 local playerCodes = {} -- [Player] = "1234"
 local aliveSet = {} -- [Player] = true
@@ -167,7 +178,7 @@ local function createLobbyFloor()
 end
 createLobbyFloor()
 
-local function attachCodeTag(character, code, signColor)
+local function attachCodeTag(character, code, signColor, rainbow)
 	local head = character:WaitForChild("Head", 5)
 	if not head then
 		return
@@ -206,7 +217,7 @@ local function attachCodeTag(character, code, signColor)
 	corner.Parent = frame
 
 	local stroke = Instance.new("UIStroke")
-	stroke.Color = Color3.fromRGB(255, 210, 60)
+	stroke.Color = signColor or SIGN_COLORS.Default
 	stroke.Thickness = 1.5
 	stroke.Parent = frame
 
@@ -219,6 +230,51 @@ local function attachCodeTag(character, code, signColor)
 	label.TextColor3 = signColor or SIGN_COLORS.Default
 	label.Text = code
 	label.Parent = frame
+
+	-- "Rainbow Code Sign" cosmetic: cycles the sign's color instead of
+	-- holding one. Self-stopping - once this billboard is replaced (next
+	-- round) or its character is gone, billboard.Parent goes nil and the
+	-- loop ends on its own with nothing else to clean up.
+	if rainbow then
+		task.spawn(function()
+			while billboard.Parent do
+				local color = Color3.fromHSV((os.clock() * 0.3) % 1, 0.85, 1)
+				label.TextColor3 = color
+				stroke.Color = color
+				task.wait(0.05)
+			end
+		end)
+	end
+end
+
+-- "Neon Trail" cosmetic: a glowing trail between two attachments on the
+-- root part. Tied to this specific character instance, so it's cleaned
+-- up automatically on death/respawn along with everything else on it.
+local function applyTrailCosmetic(character, color)
+	local hrp = character:FindFirstChild("HumanoidRootPart")
+	if not hrp then
+		return
+	end
+
+	local topAttachment = Instance.new("Attachment")
+	topAttachment.Name = "TrailTop"
+	topAttachment.Position = Vector3.new(0, 1, 0)
+	topAttachment.Parent = hrp
+
+	local bottomAttachment = Instance.new("Attachment")
+	bottomAttachment.Name = "TrailBottom"
+	bottomAttachment.Position = Vector3.new(0, -1, 0)
+	bottomAttachment.Parent = hrp
+
+	local trail = Instance.new("Trail")
+	trail.Attachment0 = topAttachment
+	trail.Attachment1 = bottomAttachment
+	trail.Color = ColorSequence.new(color)
+	trail.Transparency = NumberSequence.new(0, 1)
+	trail.WidthScale = NumberSequence.new(1, 0)
+	trail.Lifetime = 0.4
+	trail.MinLength = 0
+	trail.Parent = hrp
 end
 
 -- Always-visible marker (unlike the code sign) so the bounty target can
@@ -512,6 +568,16 @@ local function clampChargeFraction(rawFraction)
 	return math.clamp(rawFraction, GRENADE_MIN_CHARGE_FRACTION, 1)
 end
 
+-- Applies the VIP Day Pass discount on top of whatever cooldown a throw
+-- would otherwise use (including any permanent gamepass discount, e.g.
+-- Quick Fuse on Flashbang - the two stack).
+local function applyVipDiscount(player, cooldown)
+	if MonetizationService.HasActiveVIP(player) then
+		return cooldown * VIP_COOLDOWN_MULTIPLIER
+	end
+	return cooldown
+end
+
 -- True (and starts the cooldown) if the player's ability was off cooldown.
 local function tryStartCooldown(readyAtTable, player, cooldown, cooldownRemote)
 	local now = os.clock()
@@ -530,6 +596,7 @@ ThrowFlashbang.OnServerEvent:Connect(function(player, aimDirection, chargeFracti
 
 	local cooldown = MonetizationService.Owns(player, "FastFlashbang") and FAST_FLASHBANG_COOLDOWN
 		or FLASHBANG_COOLDOWN
+	cooldown = applyVipDiscount(player, cooldown)
 	if not tryStartCooldown(flashbangReadyAt, player, cooldown, FlashbangCooldownRemote) then
 		return
 	end
@@ -582,7 +649,7 @@ ThrowEMP.OnServerEvent:Connect(function(player, aimDirection, chargeFraction)
 	if not roundActive or not aliveSet[player] or typeof(aimDirection) ~= "Vector3" then
 		return
 	end
-	if not tryStartCooldown(empReadyAt, player, EMP_COOLDOWN, EMPCooldownRemote) then
+	if not tryStartCooldown(empReadyAt, player, applyVipDiscount(player, EMP_COOLDOWN), EMPCooldownRemote) then
 		return
 	end
 
@@ -639,7 +706,7 @@ ThrowStun.OnServerEvent:Connect(function(player, aimDirection, chargeFraction)
 	if not roundActive or not aliveSet[player] or typeof(aimDirection) ~= "Vector3" then
 		return
 	end
-	if not tryStartCooldown(stunReadyAt, player, STUN_COOLDOWN, StunCooldownRemote) then
+	if not tryStartCooldown(stunReadyAt, player, applyVipDiscount(player, STUN_COOLDOWN), StunCooldownRemote) then
 		return
 	end
 
@@ -676,7 +743,7 @@ ThrowScanner.OnServerEvent:Connect(function(player, aimDirection, chargeFraction
 	if not roundActive or not aliveSet[player] or typeof(aimDirection) ~= "Vector3" then
 		return
 	end
-	if not tryStartCooldown(scannerReadyAt, player, SCANNER_COOLDOWN, ScannerCooldownRemote) then
+	if not tryStartCooldown(scannerReadyAt, player, applyVipDiscount(player, SCANNER_COOLDOWN), ScannerCooldownRemote) then
 		return
 	end
 
@@ -964,12 +1031,21 @@ local function runRound()
 		local character = plr.Character
 		if character then
 			local signColor = SIGN_COLORS.Default
-			if MonetizationService.Owns(plr, "GoldSign") then
-				signColor = SIGN_COLORS.GoldSign
-			elseif MonetizationService.Owns(plr, "CrimsonSign") then
-				signColor = SIGN_COLORS.CrimsonSign
+			local rainbow = false
+			for _, passKey in ipairs(SIGN_COSMETIC_PRIORITY) do
+				if MonetizationService.Owns(plr, passKey) then
+					if passKey == "RainbowSign" then
+						rainbow = true
+					else
+						signColor = SIGN_COLORS[passKey]
+					end
+					break
+				end
 			end
-			attachCodeTag(character, playerCodes[plr], signColor)
+			attachCodeTag(character, playerCodes[plr], signColor, rainbow)
+			if MonetizationService.Owns(plr, "NeonTrail") then
+				applyTrailCosmetic(character, NEON_TRAIL_COLOR)
+			end
 
 			local humanoid = character:FindFirstChildOfClass("Humanoid")
 			if humanoid then

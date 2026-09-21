@@ -38,6 +38,38 @@ ShopConfig.GamePasses = {
 		kind = "Cosmetic",
 		priceRobux = 100,
 	},
+	{
+		key = "EmeraldSign",
+		id = 0, -- TODO: your Game Pass id
+		name = "Emerald Code Sign",
+		description = "Your code sign glows emerald green instead of yellow. Cosmetic only.",
+		kind = "Cosmetic",
+		priceRobux = 100,
+	},
+	{
+		key = "VioletSign",
+		id = 0, -- TODO: your Game Pass id
+		name = "Violet Code Sign",
+		description = "Your code sign glows violet instead of yellow. Cosmetic only.",
+		kind = "Cosmetic",
+		priceRobux = 100,
+	},
+	{
+		key = "RainbowSign",
+		id = 0, -- TODO: your Game Pass id
+		name = "Rainbow Code Sign",
+		description = "Your code sign cycles through every color. Cosmetic only, beats any other sign color you own.",
+		kind = "Cosmetic",
+		priceRobux = 150,
+	},
+	{
+		key = "NeonTrail",
+		id = 0, -- TODO: your Game Pass id
+		name = "Neon Trail",
+		description = "A glowing trail follows you while you run. Cosmetic only.",
+		kind = "Cosmetic",
+		priceRobux = 130,
+	},
 }
 
 -- Developer products: consumable, can be bought repeatedly. Must be
@@ -78,6 +110,14 @@ ShopConfig.DeveloperProducts = {
 		kind = "Pick next map",
 		mapKey = "Desert",
 		priceRobux = 50,
+	},
+	{
+		key = "VIPDayPass",
+		id = 0, -- TODO: your Developer Product id
+		name = "VIP Day Pass",
+		description = "All four grenade cooldowns cut by 30% for 24 hours from purchase. Stacks its time with itself, and stacks its discount with Quick Fuse.",
+		kind = "Day pass",
+		priceRobux = 250,
 	},
 }
 

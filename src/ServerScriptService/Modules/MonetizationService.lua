@@ -4,6 +4,7 @@
 local MarketplaceService = game:GetService("MarketplaceService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local DataStoreService = game:GetService("DataStoreService")
 
 local ShopConfig = require(ReplicatedStorage.Modules.ShopConfig)
 
@@ -16,6 +17,15 @@ MonetizationService.ExtraFlashbangGranted = extraFlashbangSignal.Event
 
 local mapPinnedSignal = Instance.new("BindableEvent")
 MonetizationService.MapPinned = mapPinnedSignal.Event
+
+-- VIP Day Pass: a developer product, so it can be bought repeatedly, but
+-- what it grants is time-based rather than one round's worth of something.
+-- The expiry has to survive server restarts and hopping between servers
+-- (a day is far longer than one server stays up), so it's kept in a
+-- DataStore rather than just in memory.
+local vipStore = DataStoreService:GetDataStore("VIPDayPassExpiry")
+local vipExpiresAt = {} -- [Player] = unix timestamp its VIP runs out, once loaded
+local VIP_DURATION_SECONDS = 24 * 60 * 60
 
 local function findPassById(id)
 	for _, pass in ipairs(ShopConfig.GamePasses) do
@@ -48,17 +58,48 @@ local function refreshOwnership(player)
 	ownershipCache[player] = owned
 end
 
+local function loadVipExpiry(player)
+	local ok, storedExpiry = pcall(function()
+		return vipStore:GetAsync("Player_" .. player.UserId)
+	end)
+	vipExpiresAt[player] = (ok and storedExpiry) or 0
+end
+
 function MonetizationService.Init(player)
 	task.spawn(refreshOwnership, player)
+	task.spawn(loadVipExpiry, player)
 end
 
 function MonetizationService.Cleanup(player)
 	ownershipCache[player] = nil
+	vipExpiresAt[player] = nil
 end
 
 function MonetizationService.Owns(player, passKey)
 	local owned = ownershipCache[player]
 	return owned ~= nil and owned[passKey] == true
+end
+
+-- True while a purchased VIP Day Pass hasn't run out yet. Before the
+-- player's stored expiry has loaded, this reads false rather than
+-- stalling anything on the DataStore call.
+function MonetizationService.HasActiveVIP(player)
+	local expiry = vipExpiresAt[player]
+	return expiry ~= nil and os.time() < expiry
+end
+
+local function grantVipDay(player)
+	local now = os.time()
+	local current = vipExpiresAt[player] or 0
+	-- Stacks its remaining time rather than just resetting to 24h, so
+	-- buying another one early isn't wasted.
+	local newExpiry = math.max(current, now) + VIP_DURATION_SECONDS
+	vipExpiresAt[player] = newExpiry
+	task.spawn(function()
+		pcall(function()
+			vipStore:SetAsync("Player_" .. player.UserId, newExpiry)
+		end)
+	end)
 end
 
 MarketplaceService.PromptGamePassPurchaseFinished:Connect(function(player, gamePassId, wasPurchased)
@@ -81,6 +122,8 @@ MarketplaceService.ProcessReceipt = function(receiptInfo)
 	if product then
 		if product.key == "ExtraFlashbang" then
 			extraFlashbangSignal:Fire(player)
+		elseif product.key == "VIPDayPass" then
+			grantVipDay(player)
 		elseif product.mapKey then
 			mapPinnedSignal:Fire(player, product.mapKey)
 		end
