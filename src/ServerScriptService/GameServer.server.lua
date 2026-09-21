@@ -1,10 +1,13 @@
--- Code Duel: FFA round loop.
+-- Code Duel: FFA (or Duos, auto-enabled at 4+ players) round loop.
 -- Every alive player wears a random 4-digit code above their head. Type
 -- another player's code into the guess box to kill them; guess wrong (no
--- living player has that code) and you die instead. Three thrown grenades
+-- living enemy has that code) and you die instead. Four thrown grenades
 -- are available, each on its own personal cooldown: a flashbang that
--- blinds nearby players, an EMP that jams guessing, and a stun that slows
--- movement.
+-- blinds nearby players, an EMP that jams guessing, a stun that slows
+-- movement, and a scanner that reveals nearby enemy signs to the thrower.
+-- Kill two in a round and you become the bounty, visible to everyone.
+-- A slow-shrinking safe zone kicks in late in longer rounds as a
+-- camping safety net.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -34,16 +37,24 @@ local EMPCooldownRemote = Remotes:WaitForChild("EMPCooldown")
 local ThrowStun = Remotes:WaitForChild("ThrowStun")
 local StunEffect = Remotes:WaitForChild("StunEffect")
 local StunCooldownRemote = Remotes:WaitForChild("StunCooldown")
+local ThrowScanner = Remotes:WaitForChild("ThrowScanner")
+local ScannerEffect = Remotes:WaitForChild("ScannerEffect")
+local ScannerPing = Remotes:WaitForChild("ScannerPing")
+local ScannerCooldownRemote = Remotes:WaitForChild("ScannerCooldown")
+local BountyUpdate = Remotes:WaitForChild("BountyUpdate")
+local BountyClaimed = Remotes:WaitForChild("BountyClaimed")
 local PlayerEliminated = Remotes:WaitForChild("PlayerEliminated")
 local RoundStatus = Remotes:WaitForChild("RoundStatus")
 
 local MIN_PLAYERS = 2
+local DUOS_MIN_PLAYERS = 4 -- Duos auto-activates at this many players; below it, plain FFA
 local INTERMISSION_TIME = 15
 local POST_ROUND_TIME = 6
 local DEFAULT_WALK_SPEED = 16
 local SPECTATOR_POSITION = Vector3.new(0, 300, 0)
 local GRENADE_FUSE_TIME = 1.6 -- fixed time-to-detonate for every thrown grenade
 local GRENADE_MIN_CHARGE_FRACTION = 0.2 -- a quick tap still throws it this far
+local GRENADE_LAUNCH_ANGLE = math.rad(45)
 
 local FLASHBANG_COOLDOWN = 6
 local FAST_FLASHBANG_COOLDOWN = 4 -- with the "Quick Fuse" game pass
@@ -64,6 +75,26 @@ local STUN_DURATION = 4
 local STUN_SPEED_MULTIPLIER = 0.35
 local STUN_THROW_RANGE = 150
 
+local SCANNER_COOLDOWN = 10
+local SCANNER_RADIUS = 45 -- ignores walls/facing - a real information tool, not a debuff
+local SCANNER_REVEAL_DURATION = 5
+local SCANNER_THROW_RANGE = 150
+
+local BOUNTY_KILL_THRESHOLD = 2 -- round kills needed to become (or take over) the bounty
+local BOUNTY_KILL_BONUS = 1 -- extra Kills credit for claiming the bounty
+
+-- Tuned as a late, gentle safety net rather than a core mechanic - it
+-- doesn't kick in until well into a round, and only pushes people out of
+-- the far edges, not the whole map. Set ZONE_START_DELAY very high (or
+-- ZONE_DAMAGE_PER_TICK to 0) to effectively disable it if it still isn't
+-- pulling its weight once tested.
+local ZONE_START_DELAY = 45
+local ZONE_START_RADIUS = 130
+local ZONE_END_RADIUS = 40
+local ZONE_SHRINK_DURATION = 45
+local ZONE_DAMAGE_PER_TICK = 4
+local ZONE_TICK_INTERVAL = 1
+
 local SIGN_COLORS = {
 	Default = Color3.fromRGB(255, 220, 90),
 	GoldSign = Color3.fromRGB(255, 200, 40),
@@ -75,10 +106,15 @@ local aliveSet = {} -- [Player] = true
 local flashbangReadyAt = {} -- [Player] = os.clock() timestamp
 local empReadyAt = {}
 local stunReadyAt = {}
+local scannerReadyAt = {}
 local empBlockedUntil = {} -- [Player] = os.clock() timestamp until guessing is jammed
 local stunnedUntil = {} -- [Player] = os.clock() timestamp until movement is slowed
+local roundKills = {} -- [Player] = kills this round, for the bounty
 local roundActive = false
+local roundId = 0 -- bumped each round so a stale safe-zone loop can tell it's obsolete
+local isDuosRound = false
 local pinnedNextMap = nil -- set by a "pick next map" purchase; consumed by the next round
+local bountyPlayer = nil
 
 local MAP_NAMES = {}
 for _, choice in ipairs(MapGenerator.Choices) do
@@ -144,13 +180,16 @@ local function attachCodeTag(character, code, signColor)
 	-- Small sign-style tag, not "always on top" (so walls block it) and
 	-- capped to a short render distance. A client-side script further
 	-- restricts it to only show when a viewer is roughly in front of this
-	-- player, like reading a sign held at chest height.
+	-- player, like reading a sign held at chest height (or when the
+	-- viewer used a scanner pulse, or the viewer is a teammate in Duos).
+	-- MaxDistance is a little past the scanner's reveal radius so a
+	-- scanned sign can actually render that far out.
 	local billboard = Instance.new("BillboardGui")
 	billboard.Name = "CodeTag"
 	billboard.Size = UDim2.new(0, 70, 0, 26)
 	billboard.StudsOffset = Vector3.new(0, 2.4, 0)
 	billboard.AlwaysOnTop = false
-	billboard.MaxDistance = 28
+	billboard.MaxDistance = 50
 	billboard.Enabled = false
 	billboard.Parent = head
 
@@ -181,12 +220,107 @@ local function attachCodeTag(character, code, signColor)
 	label.Parent = frame
 end
 
+-- Always-visible marker (unlike the code sign) so the bounty target can
+-- be hunted across the map - the cost of a kill streak.
+local function createBountyMarker(character)
+	local head = character:WaitForChild("Head", 5)
+	if not head then
+		return
+	end
+
+	local existing = head:FindFirstChild("BountyMarker")
+	if existing then
+		existing:Destroy()
+	end
+
+	local billboard = Instance.new("BillboardGui")
+	billboard.Name = "BountyMarker"
+	billboard.Size = UDim2.new(0, 90, 0, 34)
+	billboard.StudsOffset = Vector3.new(0, 3.6, 0)
+	billboard.AlwaysOnTop = true
+	billboard.Parent = head
+
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.new(1, 0, 1, 0)
+	label.BackgroundTransparency = 1
+	label.Font = Enum.Font.GothamBold
+	label.TextScaled = true
+	label.Text = "BOUNTY"
+	label.TextColor3 = Color3.fromRGB(255, 60, 60)
+	label.TextStrokeTransparency = 0
+	label.TextStrokeColor3 = Color3.new(0, 0, 0)
+	label.Parent = billboard
+end
+
+local function removeBountyMarker(player)
+	local character = player.Character
+	local head = character and character:FindFirstChild("Head")
+	local marker = head and head:FindFirstChild("BountyMarker")
+	if marker then
+		marker:Destroy()
+	end
+end
+
+local function clearBounty()
+	if bountyPlayer then
+		removeBountyMarker(bountyPlayer)
+		bountyPlayer = nil
+		BountyUpdate:FireAllClients(nil)
+	end
+end
+
+-- Promotes `player` to bounty if their round kill count clears the
+-- threshold and beats whoever (if anyone) currently holds it.
+local function maybePromoteBounty(player)
+	local kills = roundKills[player] or 0
+	if kills < BOUNTY_KILL_THRESHOLD then
+		return
+	end
+	if bountyPlayer == player then
+		return
+	end
+	if bountyPlayer and (roundKills[bountyPlayer] or 0) >= kills then
+		return
+	end
+
+	if bountyPlayer then
+		removeBountyMarker(bountyPlayer)
+	end
+	bountyPlayer = player
+	local character = player.Character
+	if character then
+		createBountyMarker(character)
+	end
+	BountyUpdate:FireAllClients(player.Name)
+end
+
 local function countAlive()
 	local n = 0
 	for _ in pairs(aliveSet) do
 		n += 1
 	end
 	return n
+end
+
+local function countAliveTeams()
+	local teams = {}
+	local n = 0
+	for plr in pairs(aliveSet) do
+		local teamId = plr:GetAttribute("TeamId")
+		if teamId and not teams[teamId] then
+			teams[teamId] = true
+			n += 1
+		end
+	end
+	return n
+end
+
+-- True while more than one side (team in Duos, player in FFA) is left.
+local function roundContested()
+	if isDuosRound then
+		return countAliveTeams() > 1
+	end
+	return countAlive() > 1
 end
 
 local function killCharacter(player)
@@ -203,6 +337,9 @@ local function eliminatePlayer(player, reason)
 	end
 	aliveSet[player] = nil
 	killCharacter(player)
+	if player == bountyPlayer then
+		clearBounty()
+	end
 	PlayerEliminated:FireClient(player, reason)
 	broadcastStatus("PlayerDown", { name = player.Name, reason = reason, aliveCount = countAlive() })
 end
@@ -218,17 +355,41 @@ SubmitCodeGuess.OnServerEvent:Connect(function(player, guessedCode)
 		return
 	end
 
+	local myTeam = isDuosRound and player:GetAttribute("TeamId") or nil
+
+	-- Guessing a living teammate's real code is a no-op, not a death -
+	-- they were never a valid target.
+	if myTeam then
+		for otherPlayer in pairs(aliveSet) do
+			if otherPlayer ~= player and otherPlayer:GetAttribute("TeamId") == myTeam then
+				if playerCodes[otherPlayer] == guessedCode then
+					return
+				end
+			end
+		end
+	end
+
 	local target
 	for otherPlayer in pairs(aliveSet) do
-		if otherPlayer ~= player and playerCodes[otherPlayer] == guessedCode then
+		local isTeammate = myTeam and otherPlayer:GetAttribute("TeamId") == myTeam
+		if otherPlayer ~= player and not isTeammate and playerCodes[otherPlayer] == guessedCode then
 			target = otherPlayer
 			break
 		end
 	end
 
 	if target then
+		local wasBounty = target == bountyPlayer
+
 		addStat(player, "Kills", 1)
+		roundKills[player] = (roundKills[player] or 0) + 1
 		eliminatePlayer(target, "cracked")
+
+		if wasBounty then
+			addStat(player, "Kills", BOUNTY_KILL_BONUS)
+			BountyClaimed:FireAllClients(player.Name)
+		end
+		maybePromoteBounty(player)
 	else
 		eliminatePlayer(player, "wrong-guess")
 	end
@@ -253,7 +414,6 @@ local function hasLineOfSight(fromPos, toPos)
 	return result == nil
 end
 
--- Clamps the aim point to throwRange from the thrower. Returns a spawn
 -- Builds a target exactly throwRange studs out along aimDirection (already
 -- scaled by the charge fraction by the caller) - not wherever a raycast
 -- happens to hit nearby, so a fully charged throw always goes the full
@@ -272,8 +432,6 @@ local function computeThrowTarget(hrp, aimDirection, throwRange)
 
 	return origin, landingTarget
 end
-
-local GRENADE_LAUNCH_ANGLE = math.rad(45)
 
 -- The initial velocity, launched at a fixed 45-degree angle, that reaches
 -- landingTarget from origin under gravity - a consistent lobbed arc rather
@@ -513,6 +671,46 @@ ThrowStun.OnServerEvent:Connect(function(player, aimDirection, chargeFraction)
 	end)
 end)
 
+ThrowScanner.OnServerEvent:Connect(function(player, aimDirection, chargeFraction)
+	if not roundActive or not aliveSet[player] or typeof(aimDirection) ~= "Vector3" then
+		return
+	end
+	if not tryStartCooldown(scannerReadyAt, player, SCANNER_COOLDOWN, ScannerCooldownRemote) then
+		return
+	end
+
+	local character = player.Character
+	local hrp = character and character:FindFirstChild("HumanoidRootPart")
+	if not hrp then
+		return
+	end
+
+	local throwRange = SCANNER_THROW_RANGE * clampChargeFraction(chargeFraction)
+	local origin, landingTarget = computeThrowTarget(hrp, aimDirection, throwRange)
+	local velocity = computeArcVelocity(origin, landingTarget)
+	local grenade = spawnGrenadeProjectile("ScannerGrenade", origin, velocity, Color3.fromRGB(120, 255, 190))
+
+	task.delay(GRENADE_FUSE_TIME, function()
+		local blastPoint = grenade.Position
+		grenade:Destroy()
+
+		-- Pure information tool: ignores walls and facing (unlike the
+		-- normal code sign), only for the thrower. Scanned enemies get a
+		-- brief, anonymous notice that they were spotted, for fairness.
+		ScannerEffect:FireClient(player, blastPoint, SCANNER_RADIUS, SCANNER_REVEAL_DURATION)
+
+		for _, other in ipairs(Players:GetPlayers()) do
+			if other ~= player and aliveSet[other] then
+				local otherCharacter = other.Character
+				local otherHrp = otherCharacter and otherCharacter:FindFirstChild("HumanoidRootPart")
+				if otherHrp and (otherHrp.Position - blastPoint).Magnitude <= SCANNER_RADIUS then
+					ScannerPing:FireClient(other)
+				end
+			end
+		end
+	end)
+end)
+
 MonetizationService.ExtraFlashbangGranted:Connect(function(player)
 	if roundActive and aliveSet[player] then
 		flashbangReadyAt[player] = 0
@@ -556,6 +754,100 @@ local function teleportToSpawns(players, spawnPoints)
 	end
 end
 
+-- Shuffles players into teams of 2 (an odd player out gets a team of 1,
+-- which just behaves like FFA for them - no special-casing needed).
+local function assignDuosTeams(players)
+	local shuffled = {}
+	for i, plr in ipairs(players) do
+		shuffled[i] = plr
+	end
+	for i = #shuffled, 2, -1 do
+		local j = math.random(i)
+		shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
+	end
+	for i, plr in ipairs(shuffled) do
+		plr:SetAttribute("TeamId", math.ceil(i / 2))
+	end
+end
+
+local function findTeammateName(player, players)
+	local teamId = player:GetAttribute("TeamId")
+	if not teamId then
+		return nil
+	end
+	for _, other in ipairs(players) do
+		if other ~= player and other:GetAttribute("TeamId") == teamId then
+			return other.Name
+		end
+	end
+	return nil
+end
+
+local function updateZoneWalls(walls, radius)
+	local height = 400
+	local thickness = 6
+	local size = radius * 2
+	local specs = {
+		{ Vector3.new(size + thickness, height, thickness), Vector3.new(0, height / 2 - 100, radius) },
+		{ Vector3.new(size + thickness, height, thickness), Vector3.new(0, height / 2 - 100, -radius) },
+		{ Vector3.new(thickness, height, size + thickness), Vector3.new(radius, height / 2 - 100, 0) },
+		{ Vector3.new(thickness, height, size + thickness), Vector3.new(-radius, height / 2 - 100, 0) },
+	}
+	for i, wall in ipairs(walls) do
+		wall.Size = specs[i][1]
+		wall.Position = specs[i][2]
+	end
+end
+
+local function createZoneWalls(parent)
+	local walls = {}
+	for i = 1, 4 do
+		local wall = Instance.new("Part")
+		wall.Name = "ZoneWall"
+		wall.Anchored = true
+		wall.CanCollide = false
+		wall.CanQuery = false
+		wall.Material = Enum.Material.ForceField
+		wall.Color = Color3.fromRGB(255, 90, 60)
+		wall.Transparency = 0.6
+		wall.Parent = parent
+		walls[i] = wall
+	end
+	updateZoneWalls(walls, ZONE_START_RADIUS)
+	return walls
+end
+
+-- Shrinks the boundary from ZONE_START_RADIUS to ZONE_END_RADIUS starting
+-- ZONE_START_DELAY seconds into the round, damaging anyone caught outside
+-- it. Parented under the round's mapFolder, so it's cleaned up
+-- automatically when the map is destroyed - this loop only needs to stop
+-- iterating, not clean up after itself.
+local function runSafeZone(thisRoundId, walls)
+	local elapsed = 0
+	while roundActive and roundId == thisRoundId do
+		local t = math.clamp((elapsed - ZONE_START_DELAY) / ZONE_SHRINK_DURATION, 0, 1)
+		local radius = ZONE_START_RADIUS - (ZONE_START_RADIUS - ZONE_END_RADIUS) * t
+		updateZoneWalls(walls, radius)
+
+		if elapsed >= ZONE_START_DELAY then
+			for plr in pairs(aliveSet) do
+				local character = plr.Character
+				local hrp = character and character:FindFirstChild("HumanoidRootPart")
+				local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+				if hrp and humanoid then
+					local flatDistance = Vector2.new(hrp.Position.X, hrp.Position.Z).Magnitude
+					if flatDistance > radius then
+						humanoid:TakeDamage(ZONE_DAMAGE_PER_TICK)
+					end
+				end
+			end
+		end
+
+		task.wait(ZONE_TICK_INTERVAL)
+		elapsed += ZONE_TICK_INTERVAL
+	end
+end
+
 local function runRound()
 	local players = Players:GetPlayers()
 	if #players < MIN_PLAYERS then
@@ -584,9 +876,22 @@ local function runRound()
 	table.clear(flashbangReadyAt)
 	table.clear(empReadyAt)
 	table.clear(stunReadyAt)
+	table.clear(scannerReadyAt)
 	table.clear(empBlockedUntil)
 	table.clear(stunnedUntil)
+	table.clear(roundKills)
+	clearBounty()
 	roundActive = true
+	roundId += 1
+	local thisRoundId = roundId
+
+	isDuosRound = #players >= DUOS_MIN_PLAYERS
+	for _, plr in ipairs(players) do
+		plr:SetAttribute("TeamId", nil)
+	end
+	if isDuosRound then
+		assignDuosTeams(players)
+	end
 
 	assignCodes(players)
 	for _, plr in ipairs(players) do
@@ -621,21 +926,50 @@ local function runRound()
 		end
 	end
 
-	broadcastStatus("RoundStart", { aliveCount = countAlive(), mapName = MAP_NAMES[mapKey] or mapKey })
+	broadcastStatus("RoundStart", {
+		aliveCount = countAlive(),
+		mapName = MAP_NAMES[mapKey] or mapKey,
+		mode = isDuosRound and "Duos" or "FFA",
+		teamCount = isDuosRound and countAliveTeams() or nil,
+	})
+	for _, plr in ipairs(players) do
+		RoundStatus:FireClient(plr, "TeamInfo", { teammateName = findTeammateName(plr, players) })
+	end
 
-	while roundActive and countAlive() > 1 do
+	local zoneWalls = createZoneWalls(mapFolder)
+	task.spawn(runSafeZone, thisRoundId, zoneWalls)
+
+	while roundActive and roundContested() do
 		task.wait(1)
 	end
 	roundActive = false
 
-	local winner
-	for plr in pairs(aliveSet) do
-		winner = plr
+	if isDuosRound then
+		local winningTeamId
+		for plr in pairs(aliveSet) do
+			winningTeamId = plr:GetAttribute("TeamId")
+			break
+		end
+		local winnerNames = {}
+		if winningTeamId then
+			for plr in pairs(aliveSet) do
+				if plr:GetAttribute("TeamId") == winningTeamId then
+					addStat(plr, "Wins", 1)
+					table.insert(winnerNames, plr.Name)
+				end
+			end
+		end
+		broadcastStatus("RoundEnd", { winner = #winnerNames > 0 and table.concat(winnerNames, " & ") or nil })
+	else
+		local winner
+		for plr in pairs(aliveSet) do
+			winner = plr
+		end
+		if winner then
+			addStat(winner, "Wins", 1)
+		end
+		broadcastStatus("RoundEnd", { winner = winner and winner.Name or nil })
 	end
-	if winner then
-		addStat(winner, "Wins", 1)
-	end
-	broadcastStatus("RoundEnd", { winner = winner and winner.Name or nil })
 
 	task.wait(POST_ROUND_TIME)
 	if mapFolder and mapFolder.Parent then
@@ -654,13 +988,18 @@ Players.PlayerAdded:Connect(function(player)
 end)
 
 Players.PlayerRemoving:Connect(function(player)
+	if player == bountyPlayer then
+		clearBounty()
+	end
 	aliveSet[player] = nil
 	playerCodes[player] = nil
 	flashbangReadyAt[player] = nil
 	empReadyAt[player] = nil
 	stunReadyAt[player] = nil
+	scannerReadyAt[player] = nil
 	empBlockedUntil[player] = nil
 	stunnedUntil[player] = nil
+	roundKills[player] = nil
 	MonetizationService.Cleanup(player)
 end)
 

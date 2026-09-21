@@ -39,6 +39,24 @@
         "StunCooldown": {
           "$className": "RemoteEvent"
         },
+        "ThrowScanner": {
+          "$className": "RemoteEvent"
+        },
+        "ScannerEffect": {
+          "$className": "RemoteEvent"
+        },
+        "ScannerPing": {
+          "$className": "RemoteEvent"
+        },
+        "ScannerCooldown": {
+          "$className": "RemoteEvent"
+        },
+        "BountyUpdate": {
+          "$className": "RemoteEvent"
+        },
+        "BountyClaimed": {
+          "$className": "RemoteEvent"
+        },
         "PlayerEliminated": {
           "$className": "RemoteEvent"
         },

@@ -21,6 +21,11 @@ local EMPCooldownRemote = Remotes:WaitForChild("EMPCooldown")
 local ThrowStun = Remotes:WaitForChild("ThrowStun")
 local StunEffect = Remotes:WaitForChild("StunEffect")
 local StunCooldownRemote = Remotes:WaitForChild("StunCooldown")
+local ThrowScanner = Remotes:WaitForChild("ThrowScanner")
+local ScannerPing = Remotes:WaitForChild("ScannerPing")
+local ScannerCooldownRemote = Remotes:WaitForChild("ScannerCooldown")
+local BountyUpdate = Remotes:WaitForChild("BountyUpdate")
+local BountyClaimed = Remotes:WaitForChild("BountyClaimed")
 local PlayerEliminated = Remotes:WaitForChild("PlayerEliminated")
 local RoundStatus = Remotes:WaitForChild("RoundStatus")
 
@@ -234,6 +239,15 @@ createGrenadeButton({
 	cooldownRemote = StunCooldownRemote,
 })
 
+createGrenadeButton({
+	position = UDim2.new(1, -170, 1, -290),
+	label = "SCANNER (J)",
+	color = Color3.fromRGB(80, 220, 170),
+	key = Enum.KeyCode.J,
+	throwRemote = ThrowScanner,
+	cooldownRemote = ScannerCooldownRemote,
+})
+
 -- Flash overlay (own screen blinded when hit by an enemy's flashbang)
 local flashOverlay = Instance.new("Frame")
 flashOverlay.Size = UDim2.new(1, 0, 1, 0)
@@ -302,6 +316,39 @@ StunEffect.OnClientEvent:Connect(function(duration)
 	end)
 end)
 
+-- Scanner ping: a brief, anonymous notice that someone scanned you (no
+-- info on who or exactly where from - just that you were spotted).
+local pingLabel = Instance.new("TextLabel")
+pingLabel.Size = UDim2.new(0, 240, 0, 30)
+pingLabel.Position = UDim2.new(0.5, -120, 0, 90)
+pingLabel.BackgroundTransparency = 0.35
+pingLabel.BackgroundColor3 = Color3.new(0, 0, 0)
+pingLabel.TextColor3 = Color3.fromRGB(120, 255, 210)
+pingLabel.Font = Enum.Font.GothamBold
+pingLabel.TextScaled = true
+pingLabel.Text = "YOU WERE SCANNED"
+pingLabel.Visible = false
+pingLabel.Parent = screenGui
+
+ScannerPing.OnClientEvent:Connect(function()
+	pingLabel.Visible = true
+	task.delay(2, function()
+		pingLabel.Visible = false
+	end)
+end)
+
+-- Teammate label (Duos only) so you know who not to guess.
+local teammateLabel = Instance.new("TextLabel")
+teammateLabel.Size = UDim2.new(0, 260, 0, 26)
+teammateLabel.Position = UDim2.new(0.5, -130, 0, 56)
+teammateLabel.BackgroundTransparency = 0.35
+teammateLabel.BackgroundColor3 = Color3.new(0, 0, 0)
+teammateLabel.TextColor3 = Color3.fromRGB(150, 220, 255)
+teammateLabel.Font = Enum.Font.GothamBold
+teammateLabel.TextScaled = true
+teammateLabel.Visible = false
+teammateLabel.Parent = screenGui
+
 -- Banner (elimination / win messages)
 local banner = Instance.new("TextLabel")
 banner.Size = UDim2.new(0, 520, 0, 80)
@@ -333,17 +380,35 @@ PlayerEliminated.OnClientEvent:Connect(function(reason)
 	end
 end)
 
+BountyUpdate.OnClientEvent:Connect(function(bountyName)
+	if bountyName then
+		showBanner(string.format("%s IS NOW THE BOUNTY", bountyName:upper()), Color3.fromRGB(255, 90, 90), 3)
+	end
+end)
+
+BountyClaimed.OnClientEvent:Connect(function(killerName)
+	showBanner(string.format("BOUNTY CLAIMED BY %s", killerName:upper()), Color3.fromRGB(255, 200, 90), 3)
+end)
+
 local countdownConn
 
 RoundStatus.OnClientEvent:Connect(function(status, data)
-	-- Doesn't own the status bar, so it must not touch the countdown that
-	-- may currently be running (e.g. a map pin bought mid-intermission).
+	-- Neither of these own the status bar, so they must not touch the
+	-- countdown that may currently be running.
 	if status == "MapPinned" then
 		showBanner(
 			string.format("%s LOCKED IN %s FOR NEXT ROUND", data.by:upper(), data.mapName:upper()),
 			Color3.fromRGB(120, 190, 255),
 			4
 		)
+		return
+	elseif status == "TeamInfo" then
+		if data.teammateName then
+			teammateLabel.Text = "TEAMMATE: " .. data.teammateName:upper()
+			teammateLabel.Visible = true
+		else
+			teammateLabel.Visible = false
+		end
 		return
 	end
 
@@ -361,13 +426,18 @@ RoundStatus.OnClientEvent:Connect(function(status, data)
 			statusLabel.Text = string.format("Next round starting in %ds", remaining)
 		end)
 	elseif status == "RoundStart" then
-		statusLabel.Text = string.format("FIGHT on %s! %d players alive", data.mapName, data.aliveCount)
+		if data.mode == "Duos" then
+			statusLabel.Text = string.format("FIGHT on %s! Duos - %d teams left", data.mapName, data.teamCount)
+		else
+			statusLabel.Text = string.format("FIGHT on %s! %d players alive", data.mapName, data.aliveCount)
+		end
 	elseif status == "PlayerDown" then
 		statusLabel.Text = string.format("%s is out (%s), %d left", data.name, data.reason, data.aliveCount)
 	elseif status == "RoundEnd" then
+		teammateLabel.Visible = false
 		if data.winner then
 			statusLabel.Text = data.winner .. " WINS THE ROUND!"
-			if data.winner == player.Name then
+			if data.winner:find(player.Name, 1, true) then
 				showBanner("YOU WIN!", Color3.fromRGB(90, 220, 120), 5)
 			end
 		else
