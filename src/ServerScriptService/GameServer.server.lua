@@ -47,7 +47,7 @@ local PlayerEliminated = Remotes:WaitForChild("PlayerEliminated")
 local RoundStatus = Remotes:WaitForChild("RoundStatus")
 
 local MIN_PLAYERS = 2
-local DUOS_MIN_PLAYERS = 4 -- Duos auto-activates at this many players; below it, plain FFA
+local DUOS_MIN_PLAYERS = 8 -- Duos auto-activates at this many players; below it, plain FFA
 local INTERMISSION_TIME = 15
 local POST_ROUND_TIME = 6
 local DEFAULT_WALK_SPEED = 16
@@ -110,6 +110,7 @@ local scannerReadyAt = {}
 local empBlockedUntil = {} -- [Player] = os.clock() timestamp until guessing is jammed
 local stunnedUntil = {} -- [Player] = os.clock() timestamp until movement is slowed
 local roundKills = {} -- [Player] = kills this round, for the bounty
+local playerJoinedAt = {} -- [Player] = os.clock() when they joined, for Duos party grouping
 local roundActive = false
 local roundId = 0 -- bumped each round so a stale safe-zone loop can tell it's obsolete
 local isDuosRound = false
@@ -756,17 +757,76 @@ end
 
 -- Shuffles players into teams of 2 (an odd player out gets a team of 1,
 -- which just behaves like FFA for them - no special-casing needed).
+local PARTY_JOIN_WINDOW = 3 -- seconds; joining this close together stands in for "same party" (no public API for that)
+
+local function areFriends(a, b)
+	local ok, result = pcall(function()
+		return a:IsFriendsWith(b.UserId)
+	end)
+	return ok and result
+end
+
+local function areLikelyPartyMates(a, b)
+	local ta, tb = playerJoinedAt[a], playerJoinedAt[b]
+	return ta ~= nil and tb ~= nil and math.abs(ta - tb) <= PARTY_JOIN_WINDOW
+end
+
+-- Pairs off players from `remaining` (in place) wherever matchFn(a, b) is
+-- true, assigning each pair the next TeamId. Whoever's left after a pass
+-- carries over to the next.
+local function pairOffMatching(remaining, matchFn, nextTeamId)
+	local i = 1
+	while i <= #remaining do
+		local a = remaining[i]
+		local matchedIndex
+		for j = i + 1, #remaining do
+			if matchFn(a, remaining[j]) then
+				matchedIndex = j
+				break
+			end
+		end
+		if matchedIndex then
+			local b = table.remove(remaining, matchedIndex)
+			table.remove(remaining, i)
+			a:SetAttribute("TeamId", nextTeamId)
+			b:SetAttribute("TeamId", nextTeamId)
+			nextTeamId += 1
+		else
+			i += 1
+		end
+	end
+	return nextTeamId
+end
+
+-- Teams of 2, preferring to keep real-world groups together: mutual
+-- friends first, then anyone who joined the server within a few seconds
+-- of each other (a stand-in for Roblox Parties, which join together),
+-- then whoever's left gets paired off randomly. An odd player out gets a
+-- team of 1, which just plays like FFA for them - no special-casing
+-- needed elsewhere.
 local function assignDuosTeams(players)
-	local shuffled = {}
+	local remaining = {}
 	for i, plr in ipairs(players) do
-		shuffled[i] = plr
+		remaining[i] = plr
 	end
-	for i = #shuffled, 2, -1 do
+	for i = #remaining, 2, -1 do
 		local j = math.random(i)
-		shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
+		remaining[i], remaining[j] = remaining[j], remaining[i]
 	end
-	for i, plr in ipairs(shuffled) do
-		plr:SetAttribute("TeamId", math.ceil(i / 2))
+
+	local nextTeamId = 1
+	nextTeamId = pairOffMatching(remaining, areFriends, nextTeamId)
+	nextTeamId = pairOffMatching(remaining, areLikelyPartyMates, nextTeamId)
+
+	local i = 1
+	while i <= #remaining do
+		local a, b = remaining[i], remaining[i + 1]
+		a:SetAttribute("TeamId", nextTeamId)
+		if b then
+			b:SetAttribute("TeamId", nextTeamId)
+		end
+		nextTeamId += 1
+		i += 2
 	end
 end
 
@@ -978,6 +1038,7 @@ local function runRound()
 end
 
 Players.PlayerAdded:Connect(function(player)
+	playerJoinedAt[player] = os.clock()
 	ensureLeaderstats(player)
 	MonetizationService.Init(player)
 	player.CharacterAdded:Connect(function(character)
@@ -1000,6 +1061,7 @@ Players.PlayerRemoving:Connect(function(player)
 	empBlockedUntil[player] = nil
 	stunnedUntil[player] = nil
 	roundKills[player] = nil
+	playerJoinedAt[player] = nil
 	MonetizationService.Cleanup(player)
 end)
 
