@@ -383,28 +383,21 @@ end
 --------------------------------------------------------------------------
 
 local DESERT_ARENA_SIZE = 200
-local DESERT_BOUNDARY_HEIGHT = 40
+local DESERT_BOUNDARY_HEIGHT = 55
 local DESERT_CELL_SIZE = 10
-local DESERT_MAX_DUNE_HEIGHT = 16
-local DESERT_MIN_DUNE_HEIGHT = 2
-local DESERT_NOISE_SCALE = 0.035
+local DESERT_MAX_DUNE_HEIGHT = 26
+local DESERT_MIN_DUNE_HEIGHT = 3
+local DESERT_NOISE_SCALE = 0.02
 local DESERT_TERRAIN_FLOOR_Y = -12 -- how deep each terrain column's base sits
 
+-- The single source of truth for dune height at a point: used both to
+-- fill the terrain and to place spawn points, so spawns always land
+-- exactly on the surface that was actually built (no raycasting against
+-- freshly-generated terrain, which can miss before its collision mesh is
+-- ready and silently drop a spawn point below the sand).
 local function duneHeightAt(x, z, seed)
 	local sample = (math.noise(x * DESERT_NOISE_SCALE, z * DESERT_NOISE_SCALE, seed) + 1) / 2
 	return DESERT_MIN_DUNE_HEIGHT + sample * (DESERT_MAX_DUNE_HEIGHT - DESERT_MIN_DUNE_HEIGHT)
-end
-
--- Raycasts straight down against the terrain to find the actual dune
--- surface height at (x, z), so spawn points land on the sand instead of
--- floating above it or clipping into a dune.
-local function findTerrainSurfaceY(x, z)
-	local raycastParams = RaycastParams.new()
-	raycastParams.FilterType = Enum.RaycastFilterType.Include
-	raycastParams.FilterDescendantsInstances = { Workspace.Terrain }
-
-	local result = Workspace:Raycast(Vector3.new(x, 100, z), Vector3.new(0, -200, 0), raycastParams)
-	return result and result.Position.Y or 0
 end
 
 local function generateDesert(mapFolder)
@@ -438,7 +431,7 @@ local function generateDesert(mapFolder)
 		local angle = (i / spawnCount) * math.pi * 2
 		local radius = half - 10
 		local sx, sz = math.cos(angle) * radius, math.sin(angle) * radius
-		table.insert(spawnPoints, CFrame.new(sx, findTerrainSurfaceY(sx, sz) + 3, sz))
+		table.insert(spawnPoints, CFrame.new(sx, duneHeightAt(sx, sz, seed) + 3, sz))
 	end
 
 	return spawnPoints
