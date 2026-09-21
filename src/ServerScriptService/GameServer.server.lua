@@ -73,23 +73,44 @@ local function attachCodeTag(character, code)
 		existing:Destroy()
 	end
 
+	-- Small sign-style tag, not "always on top" (so walls block it) and
+	-- capped to a short render distance. A client-side script further
+	-- restricts it to only show when a viewer is roughly in front of this
+	-- player, like reading a sign held at chest height.
 	local billboard = Instance.new("BillboardGui")
 	billboard.Name = "CodeTag"
-	billboard.Size = UDim2.new(0, 110, 0, 44)
-	billboard.StudsOffset = Vector3.new(0, 2.6, 0)
-	billboard.AlwaysOnTop = true
+	billboard.Size = UDim2.new(0, 70, 0, 26)
+	billboard.StudsOffset = Vector3.new(0, 2.4, 0)
+	billboard.AlwaysOnTop = false
+	billboard.MaxDistance = 28
+	billboard.Enabled = false
 	billboard.Parent = head
 
+	local frame = Instance.new("Frame")
+	frame.Size = UDim2.new(1, 0, 1, 0)
+	frame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+	frame.BackgroundTransparency = 0.1
+	frame.BorderSizePixel = 0
+	frame.Parent = billboard
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 4)
+	corner.Parent = frame
+
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = Color3.fromRGB(255, 210, 60)
+	stroke.Thickness = 1.5
+	stroke.Parent = frame
+
 	local label = Instance.new("TextLabel")
-	label.Size = UDim2.new(1, 0, 1, 0)
+	label.Size = UDim2.new(1, -6, 1, -4)
+	label.Position = UDim2.new(0, 3, 0, 2)
 	label.BackgroundTransparency = 1
 	label.Font = Enum.Font.GothamBold
 	label.TextScaled = true
-	label.TextColor3 = Color3.fromRGB(255, 230, 90)
-	label.TextStrokeTransparency = 0
-	label.TextStrokeColor3 = Color3.new(0, 0, 0)
+	label.TextColor3 = Color3.fromRGB(255, 220, 90)
 	label.Text = code
-	label.Parent = billboard
+	label.Parent = frame
 end
 
 local function countAlive()
