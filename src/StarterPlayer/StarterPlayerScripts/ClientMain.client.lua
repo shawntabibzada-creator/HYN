@@ -102,11 +102,30 @@ flashButton.Parent = screenGui
 local flashReady = true
 local cooldownConn
 
+local FLASHBANG_THROW_RANGE = 60
+
+local function getAimPoint()
+	local camera = workspace.CurrentCamera
+	local character = player.Character
+	local origin = camera.CFrame.Position
+	local direction = camera.CFrame.LookVector * FLASHBANG_THROW_RANGE
+
+	local raycastParams = RaycastParams.new()
+	raycastParams.FilterType = Enum.RaycastFilterType.Exclude
+	raycastParams.FilterDescendantsInstances = character and { character } or {}
+
+	local result = workspace:Raycast(origin, direction, raycastParams)
+	if result then
+		return result.Position
+	end
+	return origin + direction
+end
+
 local function useFlashbang()
 	if not flashReady then
 		return
 	end
-	ThrowFlashbang:FireServer()
+	ThrowFlashbang:FireServer(getAimPoint())
 end
 
 flashButton.MouseButton1Click:Connect(useFlashbang)

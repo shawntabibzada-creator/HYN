@@ -7,9 +7,12 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
+local TweenService = game:GetService("TweenService")
+local ServerScriptService = game:GetService("ServerScriptService")
 
 local MapGenerator = require(ReplicatedStorage.Modules.MapGenerator)
 local CodeUtils = require(ReplicatedStorage.Modules.CodeUtils)
+local MonetizationService = require(ServerScriptService.Modules.MonetizationService)
 
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 local SubmitCodeGuess = Remotes.SubmitCodeGuess
@@ -23,9 +26,19 @@ local MIN_PLAYERS = 2
 local INTERMISSION_TIME = 15
 local POST_ROUND_TIME = 6
 local FLASHBANG_COOLDOWN = 6
+local FAST_FLASHBANG_COOLDOWN = 4 -- with the "Quick Fuse" game pass
 local FLASHBANG_RADIUS = 40
-local FLASHBANG_DURATION = 2.2
+local FLASHBANG_MAX_DURATION = 3 -- at the center of the blast
+local FLASHBANG_MIN_DURATION = 0.5 -- at the edge of the radius
+local FLASHBANG_THROW_RANGE = 60
+local FLASHBANG_FLIGHT_TIME = 0.5
 local SPECTATOR_POSITION = Vector3.new(0, 300, 0)
+
+local SIGN_COLORS = {
+	Default = Color3.fromRGB(255, 220, 90),
+	GoldSign = Color3.fromRGB(255, 200, 40),
+	CrimsonSign = Color3.fromRGB(230, 60, 60),
+}
 
 local playerCodes = {} -- [Player] = "1234"
 local aliveSet = {} -- [Player] = true
@@ -62,7 +75,22 @@ local function broadcastStatus(status, data)
 	RoundStatus:FireAllClients(status, data)
 end
 
-local function attachCodeTag(character, code)
+-- Permanent ground so players don't free-fall during intermission, when
+-- the previous round's generated map has already been destroyed and the
+-- next one hasn't been built yet.
+local function createLobbyFloor()
+	local floor = Instance.new("Part")
+	floor.Name = "LobbyFloor"
+	floor.Anchored = true
+	floor.Size = Vector3.new(320, 2, 320)
+	floor.Position = Vector3.new(0, -1, 0)
+	floor.Color = Color3.fromRGB(40, 40, 44)
+	floor.Material = Enum.Material.Concrete
+	floor.Parent = Workspace
+end
+createLobbyFloor()
+
+local function attachCodeTag(character, code, signColor)
 	local head = character:WaitForChild("Head", 5)
 	if not head then
 		return
@@ -108,7 +136,7 @@ local function attachCodeTag(character, code)
 	label.BackgroundTransparency = 1
 	label.Font = Enum.Font.GothamBold
 	label.TextScaled = true
-	label.TextColor3 = Color3.fromRGB(255, 220, 90)
+	label.TextColor3 = signColor or SIGN_COLORS.Default
 	label.Text = code
 	label.Parent = frame
 end
@@ -163,8 +191,11 @@ SubmitCodeGuess.OnServerEvent:Connect(function(player, guessedCode)
 	end
 end)
 
-ThrowFlashbang.OnServerEvent:Connect(function(player)
+ThrowFlashbang.OnServerEvent:Connect(function(player, aimPoint)
 	if not roundActive or not aliveSet[player] then
+		return
+	end
+	if typeof(aimPoint) ~= "Vector3" then
 		return
 	end
 
@@ -172,24 +203,67 @@ ThrowFlashbang.OnServerEvent:Connect(function(player)
 	if now < (flashbangReadyAt[player] or 0) then
 		return
 	end
-	flashbangReadyAt[player] = now + FLASHBANG_COOLDOWN
-	FlashbangCooldownRemote:FireClient(player, FLASHBANG_COOLDOWN)
+	local cooldown = MonetizationService.Owns(player, "FastFlashbang") and FAST_FLASHBANG_COOLDOWN
+		or FLASHBANG_COOLDOWN
+	flashbangReadyAt[player] = now + cooldown
+	FlashbangCooldownRemote:FireClient(player, cooldown)
 
 	local character = player.Character
 	local hrp = character and character:FindFirstChild("HumanoidRootPart")
 	if not hrp then
 		return
 	end
-	local origin = hrp.Position
 
-	for _, other in ipairs(Players:GetPlayers()) do
-		if other ~= player and aliveSet[other] then
-			local otherCharacter = other.Character
-			local otherHrp = otherCharacter and otherCharacter:FindFirstChild("HumanoidRootPart")
-			if otherHrp and (otherHrp.Position - origin).Magnitude <= FLASHBANG_RADIUS then
-				FlashbangEffect:FireClient(other, FLASHBANG_DURATION)
+	local origin = hrp.Position + Vector3.new(0, 1.5, 0)
+	local toTarget = aimPoint - origin
+	if toTarget.Magnitude > FLASHBANG_THROW_RANGE then
+		toTarget = toTarget.Unit * FLASHBANG_THROW_RANGE
+	end
+	local landingPoint = origin + toTarget
+
+	local grenade = Instance.new("Part")
+	grenade.Name = "FlashbangGrenade"
+	grenade.Shape = Enum.PartType.Ball
+	grenade.Size = Vector3.new(0.8, 0.8, 0.8)
+	grenade.Color = Color3.fromRGB(85, 95, 85)
+	grenade.Material = Enum.Material.Metal
+	grenade.Anchored = true
+	grenade.CanCollide = false
+	grenade.Position = origin
+	grenade.Parent = Workspace
+
+	local tween = TweenService:Create(
+		grenade,
+		TweenInfo.new(FLASHBANG_FLIGHT_TIME, Enum.EasingStyle.Linear),
+		{ Position = landingPoint }
+	)
+	tween:Play()
+
+	task.delay(FLASHBANG_FLIGHT_TIME, function()
+		grenade:Destroy()
+
+		for _, other in ipairs(Players:GetPlayers()) do
+			if aliveSet[other] then
+				local otherCharacter = other.Character
+				local otherHrp = otherCharacter and otherCharacter:FindFirstChild("HumanoidRootPart")
+				if otherHrp then
+					local distance = (otherHrp.Position - landingPoint).Magnitude
+					if distance <= FLASHBANG_RADIUS then
+						local closeness = 1 - (distance / FLASHBANG_RADIUS)
+						local duration = FLASHBANG_MIN_DURATION
+							+ (FLASHBANG_MAX_DURATION - FLASHBANG_MIN_DURATION) * closeness
+						FlashbangEffect:FireClient(other, duration)
+					end
+				end
 			end
 		end
+	end)
+end)
+
+MonetizationService.ExtraFlashbangGranted:Connect(function(player)
+	if roundActive and aliveSet[player] then
+		flashbangReadyAt[player] = 0
+		FlashbangCooldownRemote:FireClient(player, 0)
 	end
 end)
 
@@ -257,9 +331,19 @@ local function runRound()
 	for _, plr in ipairs(players) do
 		local character = plr.Character
 		if character then
-			attachCodeTag(character, playerCodes[plr])
+			local signColor = SIGN_COLORS.Default
+			if MonetizationService.Owns(plr, "GoldSign") then
+				signColor = SIGN_COLORS.GoldSign
+			elseif MonetizationService.Owns(plr, "CrimsonSign") then
+				signColor = SIGN_COLORS.CrimsonSign
+			end
+			attachCodeTag(character, playerCodes[plr], signColor)
+
 			local humanoid = character:FindFirstChildOfClass("Humanoid")
 			if humanoid then
+				-- The default overhead name/health display would otherwise
+				-- overlap the code sign; your code is your identity here.
+				humanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
 				humanoid.Died:Connect(function()
 					if roundActive then
 						eliminatePlayer(plr, "eliminated")
@@ -293,6 +377,7 @@ end
 
 Players.PlayerAdded:Connect(function(player)
 	ensureLeaderstats(player)
+	MonetizationService.Init(player)
 	player.CharacterAdded:Connect(function(character)
 		if roundActive and not aliveSet[player] then
 			character:PivotTo(CFrame.new(SPECTATOR_POSITION))
@@ -304,6 +389,7 @@ Players.PlayerRemoving:Connect(function(player)
 	aliveSet[player] = nil
 	playerCodes[player] = nil
 	flashbangReadyAt[player] = nil
+	MonetizationService.Cleanup(player)
 end)
 
 task.spawn(function()
