@@ -9,7 +9,6 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
-local TweenService = game:GetService("TweenService")
 local ServerScriptService = game:GetService("ServerScriptService")
 
 local MapGenerator = require(ReplicatedStorage.Modules.MapGenerator)
@@ -43,7 +42,7 @@ local INTERMISSION_TIME = 15
 local POST_ROUND_TIME = 6
 local DEFAULT_WALK_SPEED = 16
 local SPECTATOR_POSITION = Vector3.new(0, 300, 0)
-local GRENADE_MIN_FLIGHT_TIME = 0.15
+local GRENADE_FUSE_TIME = 1.6 -- fixed time-to-detonate for every thrown grenade
 local GRENADE_MIN_CHARGE_FRACTION = 0.2 -- a quick tap still throws it this far
 
 local FLASHBANG_COOLDOWN = 6
@@ -52,21 +51,18 @@ local FLASHBANG_RADIUS = 40
 local FLASHBANG_MAX_DURATION = 3 -- at the center of the blast
 local FLASHBANG_MIN_DURATION = 0.5 -- at the edge of the radius
 local FLASHBANG_THROW_RANGE = 225
-local FLASHBANG_THROW_SPEED = 110 -- studs per second, sets how long it's in the air
 local FLASHBANG_BACK_TURNED_MULTIPLIER = 0.3 -- min effect when facing fully away from the blast
 
 local EMP_COOLDOWN = 8
 local EMP_RADIUS = 25
 local EMP_BLOCK_DURATION = 4 -- seconds guessing is jammed for
 local EMP_THROW_RANGE = 150
-local EMP_THROW_SPEED = 110
 
 local STUN_COOLDOWN = 8
 local STUN_RADIUS = 15
 local STUN_DURATION = 4
 local STUN_SPEED_MULTIPLIER = 0.35
 local STUN_THROW_RANGE = 150
-local STUN_THROW_SPEED = 110
 
 local SIGN_COLORS = {
 	Default = Color3.fromRGB(255, 220, 90),
@@ -257,32 +253,57 @@ local function hasLineOfSight(fromPos, toPos)
 	return result == nil
 end
 
--- Shared thrown-grenade mechanics used by all three abilities: clamps the
--- throw to a max range and works out how long it should be airborne.
-local function computeThrow(hrp, aimPoint, throwRange, throwSpeed)
-	local origin = hrp.Position + Vector3.new(0, 1.5, 0)
-	local toTarget = aimPoint - origin
+-- Clamps the aim point to throwRange from the thrower. Returns a spawn
+-- origin nudged forward off the thrower's shoulder (so the grenade doesn't
+-- spawn inside their own hitbox and immediately collide with them) and the
+-- clamped target the arc should aim for.
+local function computeThrowTarget(hrp, aimPoint, throwRange)
+	local shoulder = hrp.Position + Vector3.new(0, 1.5, 0)
+	local toTarget = aimPoint - shoulder
 	if toTarget.Magnitude > throwRange then
 		toTarget = toTarget.Unit * throwRange
 	end
-	local landingPoint = origin + toTarget
-	local flightTime = math.max(toTarget.Magnitude / throwSpeed, GRENADE_MIN_FLIGHT_TIME)
-	return landingPoint, flightTime
+	local landingTarget = shoulder + toTarget
+
+	local horizontalDir = Vector3.new(toTarget.X, 0, toTarget.Z)
+	horizontalDir = horizontalDir.Magnitude > 0.001 and horizontalDir.Unit or hrp.CFrame.LookVector
+	local origin = shoulder + horizontalDir * 3
+
+	return origin, landingTarget
 end
 
--- Spawns a small glowing, trailing projectile that visibly flies from
--- origin to landingPoint over flightTime.
-local function spawnGrenadeProjectile(name, origin, landingPoint, flightTime, color)
+-- The initial velocity that, under gravity alone, reaches landingTarget
+-- from origin at t = GRENADE_FUSE_TIME - i.e. a real arc, not a straight
+-- line. Where it actually ends up may differ once it starts bouncing.
+local function computeArcVelocity(origin, landingTarget)
+	local gravity = Workspace.Gravity
+	local delta = landingTarget - origin
+	local horizontalDelta = Vector3.new(delta.X, 0, delta.Z)
+	local horizontalDistance = horizontalDelta.Magnitude
+	local horizontalDir = horizontalDistance > 0.001 and horizontalDelta.Unit or Vector3.new(0, 0, 0)
+
+	local horizontalSpeed = horizontalDistance / GRENADE_FUSE_TIME
+	local verticalSpeed = (delta.Y + 0.5 * gravity * GRENADE_FUSE_TIME ^ 2) / GRENADE_FUSE_TIME
+
+	return horizontalDir * horizontalSpeed + Vector3.new(0, verticalSpeed, 0)
+end
+
+-- Spawns a small glowing, trailing ball with real physics: gravity carries
+-- it along an arc and it bounces off whatever it hits (walls, ramps,
+-- dunes) instead of sliding straight to a precomputed point.
+local function spawnGrenadeProjectile(name, origin, velocity, color)
 	local grenade = Instance.new("Part")
 	grenade.Name = name
 	grenade.Shape = Enum.PartType.Ball
 	grenade.Size = Vector3.new(1.4, 1.4, 1.4)
 	grenade.Color = color
 	grenade.Material = Enum.Material.Neon
-	grenade.Anchored = true
-	grenade.CanCollide = false
+	grenade.Anchored = false
+	grenade.CanCollide = true
+	grenade.CustomPhysicalProperties = PhysicalProperties.new(1, 0.3, 0.55, 1, 1)
 	grenade.Position = origin
 	grenade.Parent = Workspace
+	grenade.AssemblyLinearVelocity = velocity
 
 	local glow = Instance.new("PointLight")
 	glow.Color = color
@@ -308,12 +329,6 @@ local function spawnGrenadeProjectile(name, origin, landingPoint, flightTime, co
 	})
 	trail.WidthScale = NumberSequence.new(1, 0)
 	trail.Parent = grenade
-
-	TweenService:Create(
-		grenade,
-		TweenInfo.new(flightTime, Enum.EasingStyle.Linear),
-		{ Position = landingPoint }
-	):Play()
 
 	return grenade
 end
@@ -356,16 +371,12 @@ ThrowFlashbang.OnServerEvent:Connect(function(player, aimPoint, chargeFraction)
 	end
 
 	local throwRange = FLASHBANG_THROW_RANGE * clampChargeFraction(chargeFraction)
-	local landingPoint, flightTime = computeThrow(hrp, aimPoint, throwRange, FLASHBANG_THROW_SPEED)
-	local grenade = spawnGrenadeProjectile(
-		"FlashbangGrenade",
-		hrp.Position + Vector3.new(0, 1.5, 0),
-		landingPoint,
-		flightTime,
-		Color3.fromRGB(255, 255, 255)
-	)
+	local origin, landingTarget = computeThrowTarget(hrp, aimPoint, throwRange)
+	local velocity = computeArcVelocity(origin, landingTarget)
+	local grenade = spawnGrenadeProjectile("FlashbangGrenade", origin, velocity, Color3.fromRGB(255, 255, 255))
 
-	task.delay(flightTime, function()
+	task.delay(GRENADE_FUSE_TIME, function()
+		local blastPoint = grenade.Position
 		grenade:Destroy()
 
 		for _, other in ipairs(Players:GetPlayers()) do
@@ -373,15 +384,15 @@ ThrowFlashbang.OnServerEvent:Connect(function(player, aimPoint, chargeFraction)
 				local otherCharacter = other.Character
 				local otherHrp = otherCharacter and otherCharacter:FindFirstChild("HumanoidRootPart")
 				if otherHrp then
-					local distance = (otherHrp.Position - landingPoint).Magnitude
-					if distance <= FLASHBANG_RADIUS and hasLineOfSight(landingPoint, otherHrp.Position) then
+					local distance = (otherHrp.Position - blastPoint).Magnitude
+					if distance <= FLASHBANG_RADIUS and hasLineOfSight(blastPoint, otherHrp.Position) then
 						local closeness = 1 - (distance / FLASHBANG_RADIUS)
 						local duration = FLASHBANG_MIN_DURATION
 							+ (FLASHBANG_MAX_DURATION - FLASHBANG_MIN_DURATION) * closeness
 
 						-- Looking at the blast gets the full duration; looking
 						-- away tapers it down to a minimum, not to zero.
-						local playerToBlast = landingPoint - otherHrp.Position
+						local playerToBlast = blastPoint - otherHrp.Position
 						if playerToBlast.Magnitude > 0.001 then
 							local facingDot = otherHrp.CFrame.LookVector:Dot(playerToBlast.Unit)
 							local facingFactor = FLASHBANG_BACK_TURNED_MULTIPLIER
@@ -412,23 +423,19 @@ ThrowEMP.OnServerEvent:Connect(function(player, aimPoint, chargeFraction)
 	end
 
 	local throwRange = EMP_THROW_RANGE * clampChargeFraction(chargeFraction)
-	local landingPoint, flightTime = computeThrow(hrp, aimPoint, throwRange, EMP_THROW_SPEED)
-	local grenade = spawnGrenadeProjectile(
-		"EMPGrenade",
-		hrp.Position + Vector3.new(0, 1.5, 0),
-		landingPoint,
-		flightTime,
-		Color3.fromRGB(120, 190, 255)
-	)
+	local origin, landingTarget = computeThrowTarget(hrp, aimPoint, throwRange)
+	local velocity = computeArcVelocity(origin, landingTarget)
+	local grenade = spawnGrenadeProjectile("EMPGrenade", origin, velocity, Color3.fromRGB(120, 190, 255))
 
-	task.delay(flightTime, function()
+	task.delay(GRENADE_FUSE_TIME, function()
+		local blastPoint = grenade.Position
 		grenade:Destroy()
 
 		for _, other in ipairs(Players:GetPlayers()) do
 			if aliveSet[other] then
 				local otherCharacter = other.Character
 				local otherHrp = otherCharacter and otherCharacter:FindFirstChild("HumanoidRootPart")
-				if otherHrp and (otherHrp.Position - landingPoint).Magnitude <= EMP_RADIUS then
+				if otherHrp and (otherHrp.Position - blastPoint).Magnitude <= EMP_RADIUS then
 					empBlockedUntil[other] = os.clock() + EMP_BLOCK_DURATION
 					EMPEffect:FireClient(other, EMP_BLOCK_DURATION)
 				end
@@ -473,16 +480,12 @@ ThrowStun.OnServerEvent:Connect(function(player, aimPoint, chargeFraction)
 	end
 
 	local throwRange = STUN_THROW_RANGE * clampChargeFraction(chargeFraction)
-	local landingPoint, flightTime = computeThrow(hrp, aimPoint, throwRange, STUN_THROW_SPEED)
-	local grenade = spawnGrenadeProjectile(
-		"StunGrenade",
-		hrp.Position + Vector3.new(0, 1.5, 0),
-		landingPoint,
-		flightTime,
-		Color3.fromRGB(255, 165, 40)
-	)
+	local origin, landingTarget = computeThrowTarget(hrp, aimPoint, throwRange)
+	local velocity = computeArcVelocity(origin, landingTarget)
+	local grenade = spawnGrenadeProjectile("StunGrenade", origin, velocity, Color3.fromRGB(255, 165, 40))
 
-	task.delay(flightTime, function()
+	task.delay(GRENADE_FUSE_TIME, function()
+		local blastPoint = grenade.Position
 		grenade:Destroy()
 
 		for _, other in ipairs(Players:GetPlayers()) do
@@ -490,7 +493,7 @@ ThrowStun.OnServerEvent:Connect(function(player, aimPoint, chargeFraction)
 				local otherCharacter = other.Character
 				local otherHrp = otherCharacter and otherCharacter:FindFirstChild("HumanoidRootPart")
 				local otherHumanoid = otherCharacter and otherCharacter:FindFirstChildOfClass("Humanoid")
-				if otherHrp and otherHumanoid and (otherHrp.Position - landingPoint).Magnitude <= STUN_RADIUS then
+				if otherHrp and otherHumanoid and (otherHrp.Position - blastPoint).Magnitude <= STUN_RADIUS then
 					applyStun(other, otherHumanoid)
 					StunEffect:FireClient(other, STUN_DURATION)
 				end
