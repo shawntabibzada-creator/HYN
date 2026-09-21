@@ -76,7 +76,7 @@ closeButton.MouseButton1Click:Connect(function()
 	shopFrame.Visible = false
 end)
 
-local function addEntry(kind, name, description, onBuy, configured)
+local function addEntry(kind, name, description, priceRobux, onBuy, configured)
 	local entry = Instance.new("Frame")
 	entry.Size = UDim2.new(1, -6, 0, 84)
 	entry.BackgroundColor3 = Color3.fromRGB(34, 34, 38)
@@ -130,12 +130,12 @@ local function addEntry(kind, name, description, onBuy, configured)
 	buyButton.Parent = entry
 
 	if configured then
-		buyButton.Text = "BUY"
+		buyButton.Text = string.format("BUY\n%d R$", priceRobux)
 		buyButton.BackgroundColor3 = Color3.fromRGB(80, 170, 90)
 		buyButton.TextColor3 = Color3.new(1, 1, 1)
 		buyButton.MouseButton1Click:Connect(onBuy)
 	else
-		buyButton.Text = "NOT SET UP"
+		buyButton.Text = string.format("NOT SET UP\n(%d R$)", priceRobux)
 		buyButton.BackgroundColor3 = Color3.fromRGB(70, 70, 74)
 		buyButton.TextColor3 = Color3.fromRGB(180, 180, 180)
 		buyButton.AutoButtonColor = false
@@ -143,13 +143,13 @@ local function addEntry(kind, name, description, onBuy, configured)
 end
 
 for _, pass in ipairs(ShopConfig.GamePasses) do
-	addEntry(pass.kind, pass.name, pass.description, function()
+	addEntry(pass.kind, pass.name, pass.description, pass.priceRobux, function()
 		MarketplaceService:PromptGamePassPurchase(player, pass.id)
 	end, pass.id ~= 0)
 end
 
 for _, product in ipairs(ShopConfig.DeveloperProducts) do
-	addEntry(product.kind, product.name, product.description, function()
+	addEntry(product.kind, product.name, product.description, product.priceRobux, function()
 		MarketplaceService:PromptProductPurchase(player, product.id)
 	end, product.id ~= 0)
 end
