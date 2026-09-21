@@ -70,6 +70,48 @@ local function buildRamp(parent, basePos, topPos, width, thickness, color)
 	ramp.Parent = parent
 end
 
+-- Four walls forming a box with a door gap in one side (doorSide:
+-- 1=+Z front, 2=-Z back, 3=+X right, 4=-X left). wallPart(sizeX, sizeZ,
+-- offsetX, offsetZ) is supplied by the caller, already carrying its own
+-- centerX/centerZ/height/color/material/parent closure - this function
+-- only works out each wall segment's size and offset. Shared by Town's
+-- buildings and Compound's bunkers so the door-gap math isn't duplicated.
+local function buildWalledBox(width, depth, wallThickness, doorWidth, doorSide, wallPart)
+	local halfW, halfD = width / 2, depth / 2
+
+	if doorSide == 1 then
+		local segLen = math.max((width - doorWidth) / 2, 1)
+		wallPart(segLen, wallThickness, -(width - segLen) / 2, halfD)
+		wallPart(segLen, wallThickness, (width - segLen) / 2, halfD)
+	else
+		wallPart(width, wallThickness, 0, halfD)
+	end
+
+	if doorSide == 2 then
+		local segLen = math.max((width - doorWidth) / 2, 1)
+		wallPart(segLen, wallThickness, -(width - segLen) / 2, -halfD)
+		wallPart(segLen, wallThickness, (width - segLen) / 2, -halfD)
+	else
+		wallPart(width, wallThickness, 0, -halfD)
+	end
+
+	if doorSide == 3 then
+		local segLen = math.max((depth - doorWidth) / 2, 1)
+		wallPart(wallThickness, segLen, halfW, -(depth - segLen) / 2)
+		wallPart(wallThickness, segLen, halfW, (depth - segLen) / 2)
+	else
+		wallPart(wallThickness, depth, halfW, 0)
+	end
+
+	if doorSide == 4 then
+		local segLen = math.max((depth - doorWidth) / 2, 1)
+		wallPart(wallThickness, segLen, -halfW, -(depth - segLen) / 2)
+		wallPart(wallThickness, segLen, -halfW, (depth - segLen) / 2)
+	else
+		wallPart(wallThickness, depth, -halfW, 0)
+	end
+end
+
 --------------------------------------------------------------------------
 -- Town
 --------------------------------------------------------------------------
@@ -107,7 +149,6 @@ local function buildBuilding(parent, rng, centerX, centerZ)
 	local doorWidth = 6.5
 	local matInfo = BUILDING_MATERIALS[rng:NextInteger(1, #BUILDING_MATERIALS)]
 	local doorSide = rng:NextInteger(1, 4)
-	local halfW, halfD = width / 2, depth / 2
 
 	local function wallPart(sizeX, sizeZ, offsetX, offsetZ)
 		local part = newPart({
@@ -120,41 +161,7 @@ local function buildBuilding(parent, rng, centerX, centerZ)
 		part.Parent = parent
 	end
 
-	-- Front (+Z)
-	if doorSide == 1 then
-		local segLen = math.max((width - doorWidth) / 2, 1)
-		wallPart(segLen, wallThickness, -(width - segLen) / 2, halfD)
-		wallPart(segLen, wallThickness, (width - segLen) / 2, halfD)
-	else
-		wallPart(width, wallThickness, 0, halfD)
-	end
-
-	-- Back (-Z)
-	if doorSide == 2 then
-		local segLen = math.max((width - doorWidth) / 2, 1)
-		wallPart(segLen, wallThickness, -(width - segLen) / 2, -halfD)
-		wallPart(segLen, wallThickness, (width - segLen) / 2, -halfD)
-	else
-		wallPart(width, wallThickness, 0, -halfD)
-	end
-
-	-- Right (+X)
-	if doorSide == 3 then
-		local segLen = math.max((depth - doorWidth) / 2, 1)
-		wallPart(wallThickness, segLen, halfW, -(depth - segLen) / 2)
-		wallPart(wallThickness, segLen, halfW, (depth - segLen) / 2)
-	else
-		wallPart(wallThickness, depth, halfW, 0)
-	end
-
-	-- Left (-X)
-	if doorSide == 4 then
-		local segLen = math.max((depth - doorWidth) / 2, 1)
-		wallPart(wallThickness, segLen, -halfW, -(depth - segLen) / 2)
-		wallPart(wallThickness, segLen, -halfW, (depth - segLen) / 2)
-	else
-		wallPart(wallThickness, depth, -halfW, 0)
-	end
+	buildWalledBox(width, depth, wallThickness, doorWidth, doorSide, wallPart)
 
 	local roof = newPart({
 		Name = "Roof",
@@ -300,16 +307,58 @@ local function generateTown(mapFolder)
 end
 
 --------------------------------------------------------------------------
--- Compound (two full levels: a ground floor and a raised deck covering
--- half the arena, joined by ramps at both ends - a Dust2-mid-ramp shape
--- rather than a handful of floating islands)
+-- Compound (three tiers: an open ground floor with small bunkers, a mid
+-- deck spanning most of one half of the arena, and a smaller top deck
+-- stacked above its far end - real king-of-the-hill high ground, reached
+-- only by climbing through the mid deck first)
 --------------------------------------------------------------------------
 
-local COMPOUND_ARENA_SIZE = 190
-local COMPOUND_BOUNDARY_HEIGHT = 26
-local COMPOUND_PLATFORM_HEIGHT = 14
-local COMPOUND_PLATFORM_X_MIN = 6 -- leaves the lower half fully open, deck starts here
+local COMPOUND_ARENA_SIZE = 200
+local COMPOUND_BOUNDARY_HEIGHT = 32
+local COMPOUND_MID_HEIGHT = 10
+local COMPOUND_TOP_HEIGHT = 20
+local COMPOUND_MID_X_MIN = 8 -- leaves the open ground half fully clear
+local COMPOUND_TOP_WIDTH = 26
+local COMPOUND_TOP_Z_HALF = 30
 local COMPOUND_RAMP_WIDTH = 10
+local COMPOUND_RAMP_RUN = 16
+local COMPOUND_BUNKER_SIZE = 16
+
+local COMPOUND_BUNKER_MATERIALS = {
+	{ Material = Enum.Material.Concrete, Color = Color3.fromRGB(95, 97, 100) },
+	{ Material = Enum.Material.Metal, Color = Color3.fromRGB(80, 84, 90) },
+	{ Material = Enum.Material.CorrodedMetal, Color = Color3.fromRGB(90, 78, 60) },
+}
+
+local function buildBunker(parent, rng, centerX, centerZ, size)
+	local height = 11
+	local wallThickness = 1.5
+	local doorWidth = 5
+	local doorSide = rng:NextInteger(1, 4)
+	local matInfo = COMPOUND_BUNKER_MATERIALS[rng:NextInteger(1, #COMPOUND_BUNKER_MATERIALS)]
+
+	local function wallPart(sizeX, sizeZ, offsetX, offsetZ)
+		local part = newPart({
+			Name = "BunkerWall",
+			Size = Vector3.new(sizeX, height, sizeZ),
+			Position = Vector3.new(centerX + offsetX, height / 2, centerZ + offsetZ),
+			Color = matInfo.Color,
+			Material = matInfo.Material,
+		})
+		part.Parent = parent
+	end
+
+	buildWalledBox(size, size, wallThickness, doorWidth, doorSide, wallPart)
+
+	local roof = newPart({
+		Name = "BunkerRoof",
+		Size = Vector3.new(size + 1, 1, size + 1),
+		Position = Vector3.new(centerX, height + 0.5, centerZ),
+		Color = Color3.fromRGB(60, 62, 66),
+		Material = Enum.Material.Metal,
+	})
+	roof.Parent = parent
+end
 
 local function generateCompound(mapFolder)
 	local rng = Random.new()
@@ -318,39 +367,77 @@ local function generateCompound(mapFolder)
 	buildFloor(mapFolder, COMPOUND_ARENA_SIZE, Color3.fromRGB(70, 72, 76), Enum.Material.Concrete)
 	buildBoundary(mapFolder, COMPOUND_ARENA_SIZE, COMPOUND_BOUNDARY_HEIGHT, Color3.fromRGB(35, 36, 40))
 
-	-- Upper level: one full deck spanning the +X half of the arena and
-	-- nearly its whole depth, walkable end to end. It relies on the
-	-- arena's own boundary walls for containment on 3 sides; its inner
-	-- edge (facing the lower half) is deliberately left open so you can
-	-- see and drop straight down into the lower level.
-	local platformXMax = half - 4
-	local platformWidth = platformXMax - COMPOUND_PLATFORM_X_MIN
-	local platformDepth = COMPOUND_ARENA_SIZE - 8
-	local platformCenterX = (COMPOUND_PLATFORM_X_MIN + platformXMax) / 2
+	-- Mid deck: spans most of the +X half of the arena end to end. Its
+	-- inner edge (facing the open ground half) is deliberately left open
+	-- so you can see and drop down; the far edge sits flush against the
+	-- arena's own boundary wall for containment.
+	local midXMax = half - 4
+	local midWidth = midXMax - COMPOUND_MID_X_MIN
+	local midDepth = COMPOUND_ARENA_SIZE - 16
+	local midCenterX = (COMPOUND_MID_X_MIN + midXMax) / 2
 
-	local platform = newPart({
-		Name = "Platform",
-		Size = Vector3.new(platformWidth, 1.5, platformDepth),
-		Position = Vector3.new(platformCenterX, COMPOUND_PLATFORM_HEIGHT, 0),
+	local midDeck = newPart({
+		Name = "MidDeck",
+		Size = Vector3.new(midWidth, 1.5, midDepth),
+		Position = Vector3.new(midCenterX, COMPOUND_MID_HEIGHT, 0),
 		Color = Color3.fromRGB(90, 92, 98),
 		Material = Enum.Material.DiamondPlate,
 	})
-	platform.Parent = mapFolder
+	midDeck.Parent = mapFolder
 
-	-- Two ramps up, at opposite ends of the deck, so there's more than one
-	-- way to rotate between levels.
+	-- Top deck: a smaller box stacked above the mid deck's far end,
+	-- sharing its far edge (and the boundary wall behind it) and reached
+	-- only by climbing a second set of ramps up from the mid deck itself.
+	local topXMin = midXMax - COMPOUND_TOP_WIDTH
+	local topDepth = COMPOUND_TOP_Z_HALF * 2
+	local topCenterX = (topXMin + midXMax) / 2
+
+	local topDeck = newPart({
+		Name = "TopDeck",
+		Size = Vector3.new(COMPOUND_TOP_WIDTH, 1.5, topDepth),
+		Position = Vector3.new(topCenterX, COMPOUND_TOP_HEIGHT, 0),
+		Color = Color3.fromRGB(110, 100, 95),
+		Material = Enum.Material.DiamondPlate,
+	})
+	topDeck.Parent = mapFolder
+
+	-- Ground -> mid ramps at opposite ends of the deck. The top point
+	-- lands exactly on the deck's real edge (COMPOUND_MID_X_MIN), not
+	-- somewhere under the slab.
 	for _, z in ipairs({ -half * 0.55, half * 0.55 }) do
-		local basePoint = Vector3.new(-8, 0.2, z)
-		local topPoint = Vector3.new(COMPOUND_PLATFORM_X_MIN + 14, COMPOUND_PLATFORM_HEIGHT, z)
+		local basePoint = Vector3.new(COMPOUND_MID_X_MIN - COMPOUND_RAMP_RUN, 0.2, z)
+		local topPoint = Vector3.new(COMPOUND_MID_X_MIN, COMPOUND_MID_HEIGHT, z)
 		buildRamp(mapFolder, basePoint, topPoint, COMPOUND_RAMP_WIDTH, 1, Color3.fromRGB(90, 92, 98))
 	end
 
-	-- Ground-level cover, including the shaded area underneath the deck.
-	local groundCrateCount = rng:NextInteger(8, 12)
+	-- Mid -> top ramps, climbing from the mid deck's own surface up to
+	-- the top deck's real edge (topXMin).
+	for _, z in ipairs({ -COMPOUND_TOP_Z_HALF * 0.5, COMPOUND_TOP_Z_HALF * 0.5 }) do
+		local basePoint = Vector3.new(topXMin - COMPOUND_RAMP_RUN, COMPOUND_MID_HEIGHT, z)
+		local topPoint = Vector3.new(topXMin, COMPOUND_TOP_HEIGHT, z)
+		buildRamp(mapFolder, basePoint, topPoint, COMPOUND_RAMP_WIDTH, 1, Color3.fromRGB(120, 110, 100))
+	end
+
+	-- Ground level: small enclosed bunkers on the open side for real
+	-- cover, not just crates, plus scattered crates elsewhere.
+	local bunkerX = -half + 32
+	local bunkerZs = { -half * 0.55, 0, half * 0.55 }
+	for _, z in ipairs(bunkerZs) do
+		buildBunker(mapFolder, rng, bunkerX, z, COMPOUND_BUNKER_SIZE)
+	end
+
+	local groundCrateCount = rng:NextInteger(6, 10)
 	for _ = 1, groundCrateCount do
-		local x = rng:NextNumber(-half + 10, half - 10)
+		local x = rng:NextNumber(-half + 10, COMPOUND_MID_X_MIN - 4)
 		local z = rng:NextNumber(-half + 10, half - 10)
-		if Vector2.new(x, z).Magnitude > 12 then
+		local nearBunker = false
+		for _, bz in ipairs(bunkerZs) do
+			if Vector2.new(x - bunkerX, z - bz).Magnitude < 14 then
+				nearBunker = true
+				break
+			end
+		end
+		if not nearBunker then
 			local size = rng:NextNumber(5, 9)
 			local crate = newPart({
 				Name = "Crate",
@@ -364,16 +451,33 @@ local function generateCompound(mapFolder)
 		end
 	end
 
-	-- Cover up on the deck too.
-	local platformCrateCount = rng:NextInteger(5, 9)
-	for _ = 1, platformCrateCount do
-		local x = rng:NextNumber(COMPOUND_PLATFORM_X_MIN + 6, platformXMax - 6)
-		local z = rng:NextNumber(-platformDepth / 2 + 10, platformDepth / 2 - 10)
+	-- Mid deck cover.
+	local midCrateCount = rng:NextInteger(5, 8)
+	for _ = 1, midCrateCount do
+		local x = rng:NextNumber(COMPOUND_MID_X_MIN + 6, midXMax - 6)
+		local z = rng:NextNumber(-midDepth / 2 + 10, midDepth / 2 - 10)
 		local size = rng:NextNumber(4, 6)
 		local crate = newPart({
 			Name = "Crate",
 			Size = Vector3.new(size, size, size),
-			Position = Vector3.new(x, COMPOUND_PLATFORM_HEIGHT + 0.75 + size / 2, z),
+			Position = Vector3.new(x, COMPOUND_MID_HEIGHT + 0.75 + size / 2, z),
+			Orientation = Vector3.new(0, rng:NextInteger(0, 359), 0),
+			Color = Color3.fromRGB(150, 110, 65),
+			Material = Enum.Material.WoodPlanks,
+		})
+		crate.Parent = mapFolder
+	end
+
+	-- Top deck cover - tight, so a couple of crates is plenty.
+	local topCrateCount = rng:NextInteger(2, 4)
+	for _ = 1, topCrateCount do
+		local x = rng:NextNumber(topXMin + 5, midXMax - 5)
+		local z = rng:NextNumber(-COMPOUND_TOP_Z_HALF + 6, COMPOUND_TOP_Z_HALF - 6)
+		local size = rng:NextNumber(4, 5)
+		local crate = newPart({
+			Name = "Crate",
+			Size = Vector3.new(size, size, size),
+			Position = Vector3.new(x, COMPOUND_TOP_HEIGHT + 0.75 + size / 2, z),
 			Orientation = Vector3.new(0, rng:NextInteger(0, 359), 0),
 			Color = Color3.fromRGB(150, 110, 65),
 			Material = Enum.Material.WoodPlanks,
@@ -383,8 +487,7 @@ local function generateCompound(mapFolder)
 
 	local spawnPoints = {}
 
-	-- Ground-level spawns spread across the whole lower footprint,
-	-- including under the deck.
+	-- Ground-level spawns around the whole lower footprint.
 	local groundSpawnCount = 16
 	for i = 1, groundSpawnCount do
 		local angle = (i / groundSpawnCount) * math.pi * 2
@@ -392,12 +495,20 @@ local function generateCompound(mapFolder)
 		table.insert(spawnPoints, CFrame.new(math.cos(angle) * radius, 3, math.sin(angle) * radius))
 	end
 
-	-- Deck-level spawns spread along its length.
-	local platformSpawnCount = 10
-	for i = 1, platformSpawnCount do
-		local t = (i - 0.5) / platformSpawnCount
-		local z = -platformDepth / 2 + t * platformDepth
-		table.insert(spawnPoints, CFrame.new(platformCenterX, COMPOUND_PLATFORM_HEIGHT + 3, z))
+	-- Mid deck spawns along its length.
+	local midSpawnCount = 8
+	for i = 1, midSpawnCount do
+		local t = (i - 0.5) / midSpawnCount
+		local z = -midDepth / 2 + t * midDepth
+		table.insert(spawnPoints, CFrame.new(midCenterX, COMPOUND_MID_HEIGHT + 3, z))
+	end
+
+	-- Top deck spawns.
+	local topSpawnCount = 4
+	for i = 1, topSpawnCount do
+		local t = (i - 0.5) / topSpawnCount
+		local z = -COMPOUND_TOP_Z_HALF + t * topDepth
+		table.insert(spawnPoints, CFrame.new(topCenterX, COMPOUND_TOP_HEIGHT + 3, z))
 	end
 
 	return spawnPoints
