@@ -77,7 +77,7 @@ local STUN_THROW_RANGE = 150
 
 local SCANNER_COOLDOWN = 10
 local SCANNER_RADIUS = 45 -- ignores walls/facing - a real information tool, not a debuff
-local SCANNER_REVEAL_DURATION = 0.3 -- a brief flash of the code, not a sustained reveal (below ~0.2s tends to render 0 frames)
+local SCANNER_REVEAL_DURATION = 0.175 -- a brief flash of the code, not a sustained reveal
 local SCANNER_THROW_RANGE = 150
 
 local VIP_COOLDOWN_MULTIPLIER = 0.7 -- with an active "VIP Day Pass"; stacks with Quick Fuse
@@ -805,18 +805,74 @@ local function assignCodes(players)
 	end
 end
 
-local function teleportToSpawns(players, spawnPoints)
-	local shuffled = {}
-	for i, spawnPoint in ipairs(spawnPoints) do
-		shuffled[i] = spawnPoint
+-- Picks `count` spawns out of the map's full list: preferring ones away
+-- from the outer edge when there are only a few players (nobody needs to
+-- be pushed to the boundary just to fill an otherwise-empty map), then
+-- spreading the chosen spawns apart from each other so players don't land
+-- right next to one another. "Away from the edge" uses horizontal-only
+-- distance from the spawn set's center (elevation isn't what makes a spot
+-- feel like a boundary); "spread apart" uses full 3D distance (a
+-- different tier on Compound is a real separation even where it's
+-- horizontally close to another spawn).
+local function selectSpawnCFrames(spawnPoints, count)
+	if count >= #spawnPoints then
+		return spawnPoints
 	end
-	for i = #shuffled, 2, -1 do
+
+	local sumX, sumZ = 0, 0
+	for _, cframe in ipairs(spawnPoints) do
+		sumX += cframe.Position.X
+		sumZ += cframe.Position.Z
+	end
+	local centerX, centerZ = sumX / #spawnPoints, sumZ / #spawnPoints
+
+	local byCentrality = {}
+	for _, cframe in ipairs(spawnPoints) do
+		local dx, dz = cframe.Position.X - centerX, cframe.Position.Z - centerZ
+		table.insert(byCentrality, { cframe = cframe, horizontalDist = math.sqrt(dx * dx + dz * dz) })
+	end
+	table.sort(byCentrality, function(a, b)
+		return a.horizontalDist < b.horizontalDist
+	end)
+
+	-- Grows toward the full set (edges included) as there are more
+	-- players needing spread across the whole map.
+	local candidateCount = math.min(#byCentrality, math.max(count * 3, 6))
+	local candidates = {}
+	for i = 1, candidateCount do
+		table.insert(candidates, byCentrality[i].cframe)
+	end
+
+	local chosen = {}
+	table.insert(chosen, table.remove(candidates, math.random(#candidates)))
+	while #chosen < count and #candidates > 0 do
+		local bestIndex, bestMinDist = 1, -1
+		for i, candidate in ipairs(candidates) do
+			local minDist = math.huge
+			for _, picked in ipairs(chosen) do
+				minDist = math.min(minDist, (candidate.Position - picked.Position).Magnitude)
+			end
+			if minDist > bestMinDist then
+				bestMinDist = minDist
+				bestIndex = i
+			end
+		end
+		table.insert(chosen, table.remove(candidates, bestIndex))
+	end
+
+	return chosen
+end
+
+local function teleportToSpawns(players, spawnPoints)
+	local chosen = selectSpawnCFrames(spawnPoints, #players)
+
+	for i = #chosen, 2, -1 do
 		local j = math.random(i)
-		shuffled[i], shuffled[j] = shuffled[j], shuffled[i]
+		chosen[i], chosen[j] = chosen[j], chosen[i]
 	end
 
 	for i, plr in ipairs(players) do
-		local cframe = shuffled[((i - 1) % #shuffled) + 1]
+		local cframe = chosen[((i - 1) % #chosen) + 1]
 		local character = plr.Character or plr.CharacterAdded:Wait()
 		character:PivotTo(cframe)
 	end

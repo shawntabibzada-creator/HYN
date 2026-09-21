@@ -578,6 +578,17 @@ local function generateDesert(mapFolder)
 		table.insert(spawnPoints, CFrame.new(sx, duneHeightAt(sx, sz, seed) + 15, sz))
 	end
 
+	-- A closer-in ring too, so a small player count isn't forced onto the
+	-- boundary-hugging outer ring above - it has somewhere genuinely
+	-- interior to land instead.
+	local innerSpawnCount = 10
+	local innerRadius = half * 0.35
+	for i = 1, innerSpawnCount do
+		local angle = (i / innerSpawnCount) * math.pi * 2 + math.pi / innerSpawnCount
+		local sx, sz = math.cos(angle) * innerRadius, math.sin(angle) * innerRadius
+		table.insert(spawnPoints, CFrame.new(sx, duneHeightAt(sx, sz, seed) + 15, sz))
+	end
+
 	return spawnPoints
 end
 
