@@ -1,8 +1,10 @@
 -- Code Duel: FFA round loop.
 -- Every alive player wears a random 4-digit code above their head. Type
 -- another player's code into the guess box to kill them; guess wrong (no
--- living player has that code) and you die instead. A flashbang is
--- available on a 6-second personal cooldown to blind nearby players.
+-- living player has that code) and you die instead. Three thrown grenades
+-- are available, each on its own personal cooldown: a flashbang that
+-- blinds nearby players, an EMP that jams guessing, and a stun that slows
+-- movement.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -26,22 +28,43 @@ local SubmitCodeGuess = Remotes.SubmitCodeGuess
 local ThrowFlashbang = Remotes.ThrowFlashbang
 local FlashbangEffect = Remotes.FlashbangEffect
 local FlashbangCooldownRemote = Remotes.FlashbangCooldown
+local ThrowEMP = Remotes.ThrowEMP
+local EMPEffect = Remotes.EMPEffect
+local EMPCooldownRemote = Remotes.EMPCooldown
+local ThrowStun = Remotes.ThrowStun
+local StunEffect = Remotes.StunEffect
+local StunCooldownRemote = Remotes.StunCooldown
 local PlayerEliminated = Remotes.PlayerEliminated
 local RoundStatus = Remotes.RoundStatus
 
 local MIN_PLAYERS = 2
 local INTERMISSION_TIME = 15
 local POST_ROUND_TIME = 6
+local DEFAULT_WALK_SPEED = 16
+local SPECTATOR_POSITION = Vector3.new(0, 300, 0)
+local GRENADE_MIN_FLIGHT_TIME = 0.15
+
 local FLASHBANG_COOLDOWN = 6
 local FAST_FLASHBANG_COOLDOWN = 4 -- with the "Quick Fuse" game pass
 local FLASHBANG_RADIUS = 40
 local FLASHBANG_MAX_DURATION = 3 -- at the center of the blast
 local FLASHBANG_MIN_DURATION = 0.5 -- at the edge of the radius
-local FLASHBANG_THROW_RANGE = 225 -- 2.5x the original 90
+local FLASHBANG_THROW_RANGE = 225
 local FLASHBANG_THROW_SPEED = 110 -- studs per second, sets how long it's in the air
-local FLASHBANG_MIN_FLIGHT_TIME = 0.15
 local FLASHBANG_BACK_TURNED_MULTIPLIER = 0.3 -- min effect when facing fully away from the blast
-local SPECTATOR_POSITION = Vector3.new(0, 300, 0)
+
+local EMP_COOLDOWN = 8
+local EMP_RADIUS = 25
+local EMP_BLOCK_DURATION = 4 -- seconds guessing is jammed for
+local EMP_THROW_RANGE = 150
+local EMP_THROW_SPEED = 110
+
+local STUN_COOLDOWN = 8
+local STUN_RADIUS = 25
+local STUN_DURATION = 4
+local STUN_SPEED_MULTIPLIER = 0.35
+local STUN_THROW_RANGE = 150
+local STUN_THROW_SPEED = 110
 
 local SIGN_COLORS = {
 	Default = Color3.fromRGB(255, 220, 90),
@@ -52,6 +75,10 @@ local SIGN_COLORS = {
 local playerCodes = {} -- [Player] = "1234"
 local aliveSet = {} -- [Player] = true
 local flashbangReadyAt = {} -- [Player] = os.clock() timestamp
+local empReadyAt = {}
+local stunReadyAt = {}
+local empBlockedUntil = {} -- [Player] = os.clock() timestamp until guessing is jammed
+local stunnedUntil = {} -- [Player] = os.clock() timestamp until movement is slowed
 local roundActive = false
 
 local function ensureLeaderstats(player)
@@ -180,6 +207,9 @@ SubmitCodeGuess.OnServerEvent:Connect(function(player, guessedCode)
 	if not roundActive or not aliveSet[player] then
 		return
 	end
+	if os.clock() < (empBlockedUntil[player] or 0) then
+		return
+	end
 	if not CodeUtils.IsValidCode(guessedCode) then
 		return
 	end
@@ -219,43 +249,27 @@ local function hasLineOfSight(fromPos, toPos)
 	return result == nil
 end
 
-ThrowFlashbang.OnServerEvent:Connect(function(player, aimPoint)
-	if not roundActive or not aliveSet[player] then
-		return
-	end
-	if typeof(aimPoint) ~= "Vector3" then
-		return
-	end
-
-	local now = os.clock()
-	if now < (flashbangReadyAt[player] or 0) then
-		return
-	end
-	local cooldown = MonetizationService.Owns(player, "FastFlashbang") and FAST_FLASHBANG_COOLDOWN
-		or FLASHBANG_COOLDOWN
-	flashbangReadyAt[player] = now + cooldown
-	FlashbangCooldownRemote:FireClient(player, cooldown)
-
-	local character = player.Character
-	local hrp = character and character:FindFirstChild("HumanoidRootPart")
-	if not hrp then
-		return
-	end
-
+-- Shared thrown-grenade mechanics used by all three abilities: clamps the
+-- throw to a max range and works out how long it should be airborne.
+local function computeThrow(hrp, aimPoint, throwRange, throwSpeed)
 	local origin = hrp.Position + Vector3.new(0, 1.5, 0)
 	local toTarget = aimPoint - origin
-	if toTarget.Magnitude > FLASHBANG_THROW_RANGE then
-		toTarget = toTarget.Unit * FLASHBANG_THROW_RANGE
+	if toTarget.Magnitude > throwRange then
+		toTarget = toTarget.Unit * throwRange
 	end
 	local landingPoint = origin + toTarget
+	local flightTime = math.max(toTarget.Magnitude / throwSpeed, GRENADE_MIN_FLIGHT_TIME)
+	return landingPoint, flightTime
+end
 
-	local flightTime = math.max(toTarget.Magnitude / FLASHBANG_THROW_SPEED, FLASHBANG_MIN_FLIGHT_TIME)
-
+-- Spawns a small glowing, trailing projectile that visibly flies from
+-- origin to landingPoint over flightTime.
+local function spawnGrenadeProjectile(name, origin, landingPoint, flightTime, color)
 	local grenade = Instance.new("Part")
-	grenade.Name = "FlashbangGrenade"
+	grenade.Name = name
 	grenade.Shape = Enum.PartType.Ball
 	grenade.Size = Vector3.new(1.4, 1.4, 1.4)
-	grenade.Color = Color3.fromRGB(255, 255, 255)
+	grenade.Color = color
 	grenade.Material = Enum.Material.Neon
 	grenade.Anchored = true
 	grenade.CanCollide = false
@@ -263,7 +277,7 @@ ThrowFlashbang.OnServerEvent:Connect(function(player, aimPoint)
 	grenade.Parent = Workspace
 
 	local glow = Instance.new("PointLight")
-	glow.Color = Color3.fromRGB(255, 255, 255)
+	glow.Color = color
 	glow.Range = 14
 	glow.Brightness = 3
 	glow.Parent = grenade
@@ -279,7 +293,7 @@ ThrowFlashbang.OnServerEvent:Connect(function(player, aimPoint)
 	trail.Attachment0 = attachmentTop
 	trail.Attachment1 = attachmentBottom
 	trail.Lifetime = 0.35
-	trail.Color = ColorSequence.new(Color3.fromRGB(255, 255, 255))
+	trail.Color = ColorSequence.new(color)
 	trail.Transparency = NumberSequence.new({
 		NumberSequenceKeypoint.new(0, 0.2),
 		NumberSequenceKeypoint.new(1, 1),
@@ -287,12 +301,51 @@ ThrowFlashbang.OnServerEvent:Connect(function(player, aimPoint)
 	trail.WidthScale = NumberSequence.new(1, 0)
 	trail.Parent = grenade
 
-	local tween = TweenService:Create(
+	TweenService:Create(
 		grenade,
 		TweenInfo.new(flightTime, Enum.EasingStyle.Linear),
 		{ Position = landingPoint }
+	):Play()
+
+	return grenade
+end
+
+-- True (and starts the cooldown) if the player's ability was off cooldown.
+local function tryStartCooldown(readyAtTable, player, cooldown, cooldownRemote)
+	local now = os.clock()
+	if now < (readyAtTable[player] or 0) then
+		return false
+	end
+	readyAtTable[player] = now + cooldown
+	cooldownRemote:FireClient(player, cooldown)
+	return true
+end
+
+ThrowFlashbang.OnServerEvent:Connect(function(player, aimPoint)
+	if not roundActive or not aliveSet[player] or typeof(aimPoint) ~= "Vector3" then
+		return
+	end
+
+	local cooldown = MonetizationService.Owns(player, "FastFlashbang") and FAST_FLASHBANG_COOLDOWN
+		or FLASHBANG_COOLDOWN
+	if not tryStartCooldown(flashbangReadyAt, player, cooldown, FlashbangCooldownRemote) then
+		return
+	end
+
+	local character = player.Character
+	local hrp = character and character:FindFirstChild("HumanoidRootPart")
+	if not hrp then
+		return
+	end
+
+	local landingPoint, flightTime = computeThrow(hrp, aimPoint, FLASHBANG_THROW_RANGE, FLASHBANG_THROW_SPEED)
+	local grenade = spawnGrenadeProjectile(
+		"FlashbangGrenade",
+		hrp.Position + Vector3.new(0, 1.5, 0),
+		landingPoint,
+		flightTime,
+		Color3.fromRGB(255, 255, 255)
 	)
-	tween:Play()
 
 	task.delay(flightTime, function()
 		grenade:Destroy()
@@ -310,7 +363,7 @@ ThrowFlashbang.OnServerEvent:Connect(function(player, aimPoint)
 
 						-- Looking at the blast gets the full duration; looking
 						-- away tapers it down to a minimum, not to zero.
-						local playerToBlast = (landingPoint - otherHrp.Position)
+						local playerToBlast = landingPoint - otherHrp.Position
 						if playerToBlast.Magnitude > 0.001 then
 							local facingDot = otherHrp.CFrame.LookVector:Dot(playerToBlast.Unit)
 							local facingFactor = FLASHBANG_BACK_TURNED_MULTIPLIER
@@ -320,6 +373,106 @@ ThrowFlashbang.OnServerEvent:Connect(function(player, aimPoint)
 
 						FlashbangEffect:FireClient(other, duration)
 					end
+				end
+			end
+		end
+	end)
+end)
+
+ThrowEMP.OnServerEvent:Connect(function(player, aimPoint)
+	if not roundActive or not aliveSet[player] or typeof(aimPoint) ~= "Vector3" then
+		return
+	end
+	if not tryStartCooldown(empReadyAt, player, EMP_COOLDOWN, EMPCooldownRemote) then
+		return
+	end
+
+	local character = player.Character
+	local hrp = character and character:FindFirstChild("HumanoidRootPart")
+	if not hrp then
+		return
+	end
+
+	local landingPoint, flightTime = computeThrow(hrp, aimPoint, EMP_THROW_RANGE, EMP_THROW_SPEED)
+	local grenade = spawnGrenadeProjectile(
+		"EMPGrenade",
+		hrp.Position + Vector3.new(0, 1.5, 0),
+		landingPoint,
+		flightTime,
+		Color3.fromRGB(120, 190, 255)
+	)
+
+	task.delay(flightTime, function()
+		grenade:Destroy()
+
+		for _, other in ipairs(Players:GetPlayers()) do
+			if aliveSet[other] then
+				local otherCharacter = other.Character
+				local otherHrp = otherCharacter and otherCharacter:FindFirstChild("HumanoidRootPart")
+				if otherHrp and (otherHrp.Position - landingPoint).Magnitude <= EMP_RADIUS then
+					empBlockedUntil[other] = os.clock() + EMP_BLOCK_DURATION
+					EMPEffect:FireClient(other, EMP_BLOCK_DURATION)
+				end
+			end
+		end
+	end)
+end)
+
+-- Slows a player for STUN_DURATION. Repeated hits refresh the timer
+-- instead of stacking or letting an earlier hit's restore-speed callback
+-- cut a later stun short.
+local function applyStun(player, humanoid)
+	local alreadyStunned = (stunnedUntil[player] or 0) > os.clock()
+	stunnedUntil[player] = os.clock() + STUN_DURATION
+	if not alreadyStunned then
+		humanoid.WalkSpeed = DEFAULT_WALK_SPEED * STUN_SPEED_MULTIPLIER
+	end
+
+	task.delay(STUN_DURATION, function()
+		if os.clock() >= (stunnedUntil[player] or 0) then
+			local character = player.Character
+			local currentHumanoid = character and character:FindFirstChildOfClass("Humanoid")
+			if currentHumanoid then
+				currentHumanoid.WalkSpeed = DEFAULT_WALK_SPEED
+			end
+		end
+	end)
+end
+
+ThrowStun.OnServerEvent:Connect(function(player, aimPoint)
+	if not roundActive or not aliveSet[player] or typeof(aimPoint) ~= "Vector3" then
+		return
+	end
+	if not tryStartCooldown(stunReadyAt, player, STUN_COOLDOWN, StunCooldownRemote) then
+		return
+	end
+
+	local character = player.Character
+	local hrp = character and character:FindFirstChild("HumanoidRootPart")
+	if not hrp then
+		return
+	end
+
+	local landingPoint, flightTime = computeThrow(hrp, aimPoint, STUN_THROW_RANGE, STUN_THROW_SPEED)
+	local grenade = spawnGrenadeProjectile(
+		"StunGrenade",
+		hrp.Position + Vector3.new(0, 1.5, 0),
+		landingPoint,
+		flightTime,
+		Color3.fromRGB(255, 165, 40)
+	)
+
+	task.delay(flightTime, function()
+		grenade:Destroy()
+
+		for _, other in ipairs(Players:GetPlayers()) do
+			if aliveSet[other] then
+				local otherCharacter = other.Character
+				local otherHrp = otherCharacter and otherCharacter:FindFirstChild("HumanoidRootPart")
+				local otherHumanoid = otherCharacter and otherCharacter:FindFirstChildOfClass("Humanoid")
+				if otherHrp and otherHumanoid and (otherHrp.Position - landingPoint).Magnitude <= STUN_RADIUS then
+					applyStun(other, otherHumanoid)
+					StunEffect:FireClient(other, STUN_DURATION)
 				end
 			end
 		end
@@ -386,6 +539,10 @@ local function runRound()
 	table.clear(playerCodes)
 	table.clear(aliveSet)
 	table.clear(flashbangReadyAt)
+	table.clear(empReadyAt)
+	table.clear(stunReadyAt)
+	table.clear(empBlockedUntil)
+	table.clear(stunnedUntil)
 	roundActive = true
 
 	assignCodes(players)
@@ -408,6 +565,7 @@ local function runRound()
 
 			local humanoid = character:FindFirstChildOfClass("Humanoid")
 			if humanoid then
+				humanoid.WalkSpeed = DEFAULT_WALK_SPEED
 				-- The default overhead name/health display would otherwise
 				-- overlap the code sign; your code is your identity here.
 				humanoid.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
@@ -456,6 +614,10 @@ Players.PlayerRemoving:Connect(function(player)
 	aliveSet[player] = nil
 	playerCodes[player] = nil
 	flashbangReadyAt[player] = nil
+	empReadyAt[player] = nil
+	stunReadyAt[player] = nil
+	empBlockedUntil[player] = nil
+	stunnedUntil[player] = nil
 	MonetizationService.Cleanup(player)
 end)
 

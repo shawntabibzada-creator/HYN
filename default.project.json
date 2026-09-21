@@ -21,6 +21,24 @@
         "FlashbangCooldown": {
           "$className": "RemoteEvent"
         },
+        "ThrowEMP": {
+          "$className": "RemoteEvent"
+        },
+        "EMPEffect": {
+          "$className": "RemoteEvent"
+        },
+        "EMPCooldown": {
+          "$className": "RemoteEvent"
+        },
+        "ThrowStun": {
+          "$className": "RemoteEvent"
+        },
+        "StunEffect": {
+          "$className": "RemoteEvent"
+        },
+        "StunCooldown": {
+          "$className": "RemoteEvent"
+        },
         "PlayerEliminated": {
           "$className": "RemoteEvent"
         },
