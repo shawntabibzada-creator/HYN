@@ -28,7 +28,7 @@ ShopConfig.GamePasses = {
 		name = "Gold Code Sign",
 		description = "Your code sign glows gold instead of yellow. Cosmetic only.",
 		kind = "Cosmetic",
-		priceRobux = 79,
+		priceRobux = 100,
 	},
 	{
 		key = "CrimsonSign",
@@ -36,7 +36,7 @@ ShopConfig.GamePasses = {
 		name = "Crimson Code Sign",
 		description = "Your code sign glows red instead of yellow. Cosmetic only.",
 		kind = "Cosmetic",
-		priceRobux = 79,
+		priceRobux = 100,
 	},
 }
 
@@ -59,7 +59,7 @@ ShopConfig.DeveloperProducts = {
 		description = "The next round is guaranteed to be the Town map.",
 		kind = "Pick next map",
 		mapKey = "Town",
-		priceRobux = 49,
+		priceRobux = 50,
 	},
 	{
 		key = "PickMapCompound",
@@ -68,7 +68,7 @@ ShopConfig.DeveloperProducts = {
 		description = "The next round is guaranteed to be the Compound map.",
 		kind = "Pick next map",
 		mapKey = "Compound",
-		priceRobux = 49,
+		priceRobux = 50,
 	},
 	{
 		key = "PickMapDesert",
@@ -77,7 +77,7 @@ ShopConfig.DeveloperProducts = {
 		description = "The next round is guaranteed to be the Desert map.",
 		kind = "Pick next map",
 		mapKey = "Desert",
-		priceRobux = 49,
+		priceRobux = 50,
 	},
 }
 
