@@ -275,30 +275,57 @@ local function generateTown(mapFolder)
 end
 
 --------------------------------------------------------------------------
--- Compound (elevation: platforms + ramps)
+-- Compound (two full levels: a ground floor and a raised deck covering
+-- half the arena, joined by ramps at both ends - a Dust2-mid-ramp shape
+-- rather than a handful of floating islands)
 --------------------------------------------------------------------------
 
 local COMPOUND_ARENA_SIZE = 190
+local COMPOUND_BOUNDARY_HEIGHT = 26
 local COMPOUND_PLATFORM_HEIGHT = 14
-local COMPOUND_PLATFORM_SIZE = 18
-local COMPOUND_RAMP_RUN = 18
-local COMPOUND_RAMP_WIDTH = 8
-local COMPOUND_PLATFORM_COUNT = 6
-local COMPOUND_PLATFORM_RING_RADIUS = COMPOUND_ARENA_SIZE / 2 * 0.5
+local COMPOUND_PLATFORM_X_MIN = 6 -- leaves the lower half fully open, deck starts here
+local COMPOUND_RAMP_WIDTH = 10
 
 local function generateCompound(mapFolder)
 	local rng = Random.new()
 	local half = COMPOUND_ARENA_SIZE / 2
 
 	buildFloor(mapFolder, COMPOUND_ARENA_SIZE, Color3.fromRGB(70, 72, 76), Enum.Material.Concrete)
-	buildBoundary(mapFolder, COMPOUND_ARENA_SIZE, 24, Color3.fromRGB(35, 36, 40))
+	buildBoundary(mapFolder, COMPOUND_ARENA_SIZE, COMPOUND_BOUNDARY_HEIGHT, Color3.fromRGB(35, 36, 40))
 
-	-- Ground-level cover, kept clear of the very center.
-	local crateCount = rng:NextInteger(10, 16)
-	for _ = 1, crateCount do
-		local x = rng:NextNumber(-half + 12, half - 12)
-		local z = rng:NextNumber(-half + 12, half - 12)
-		if Vector2.new(x, z).Magnitude > 14 then
+	-- Upper level: one full deck spanning the +X half of the arena and
+	-- nearly its whole depth, walkable end to end. It relies on the
+	-- arena's own boundary walls for containment on 3 sides; its inner
+	-- edge (facing the lower half) is deliberately left open so you can
+	-- see and drop straight down into the lower level.
+	local platformXMax = half - 4
+	local platformWidth = platformXMax - COMPOUND_PLATFORM_X_MIN
+	local platformDepth = COMPOUND_ARENA_SIZE - 8
+	local platformCenterX = (COMPOUND_PLATFORM_X_MIN + platformXMax) / 2
+
+	local platform = newPart({
+		Name = "Platform",
+		Size = Vector3.new(platformWidth, 1.5, platformDepth),
+		Position = Vector3.new(platformCenterX, COMPOUND_PLATFORM_HEIGHT, 0),
+		Color = Color3.fromRGB(90, 92, 98),
+		Material = Enum.Material.DiamondPlate,
+	})
+	platform.Parent = mapFolder
+
+	-- Two ramps up, at opposite ends of the deck, so there's more than one
+	-- way to rotate between levels.
+	for _, z in ipairs({ -half * 0.55, half * 0.55 }) do
+		local basePoint = Vector3.new(-8, 0.2, z)
+		local topPoint = Vector3.new(COMPOUND_PLATFORM_X_MIN + 14, COMPOUND_PLATFORM_HEIGHT, z)
+		buildRamp(mapFolder, basePoint, topPoint, COMPOUND_RAMP_WIDTH, 1, Color3.fromRGB(90, 92, 98))
+	end
+
+	-- Ground-level cover, including the shaded area underneath the deck.
+	local groundCrateCount = rng:NextInteger(8, 12)
+	for _ = 1, groundCrateCount do
+		local x = rng:NextNumber(-half + 10, half - 10)
+		local z = rng:NextNumber(-half + 10, half - 10)
+		if Vector2.new(x, z).Magnitude > 12 then
 			local size = rng:NextNumber(5, 9)
 			local crate = newPart({
 				Name = "Crate",
@@ -312,54 +339,40 @@ local function generateCompound(mapFolder)
 		end
 	end
 
-	local spawnPoints = {}
-
-	for i = 1, COMPOUND_PLATFORM_COUNT do
-		local angle = (i / COMPOUND_PLATFORM_COUNT) * math.pi * 2
-		local ringPos = Vector3.new(
-			math.cos(angle) * COMPOUND_PLATFORM_RING_RADIUS,
-			0,
-			math.sin(angle) * COMPOUND_PLATFORM_RING_RADIUS
-		)
-		local center = Vector3.new(ringPos.X, COMPOUND_PLATFORM_HEIGHT, ringPos.Z)
-		local inward = -Vector3.new(ringPos.X, 0, ringPos.Z).Unit
-
-		local platform = newPart({
-			Name = "Platform",
-			Size = Vector3.new(COMPOUND_PLATFORM_SIZE, 1.5, COMPOUND_PLATFORM_SIZE),
-			Position = center,
-			Color = Color3.fromRGB(90, 92, 98),
-			Material = Enum.Material.DiamondPlate,
+	-- Cover up on the deck too.
+	local platformCrateCount = rng:NextInteger(5, 9)
+	for _ = 1, platformCrateCount do
+		local x = rng:NextNumber(COMPOUND_PLATFORM_X_MIN + 6, platformXMax - 6)
+		local z = rng:NextNumber(-platformDepth / 2 + 10, platformDepth / 2 - 10)
+		local size = rng:NextNumber(4, 6)
+		local crate = newPart({
+			Name = "Crate",
+			Size = Vector3.new(size, size, size),
+			Position = Vector3.new(x, COMPOUND_PLATFORM_HEIGHT + 0.75 + size / 2, z),
+			Orientation = Vector3.new(0, rng:NextInteger(0, 359), 0),
+			Color = Color3.fromRGB(150, 110, 65),
+			Material = Enum.Material.WoodPlanks,
 		})
-		platform.Parent = mapFolder
-
-		if rng:NextNumber() < 0.7 then
-			local crateSize = rng:NextNumber(4, 6)
-			local crate = newPart({
-				Name = "Crate",
-				Size = Vector3.new(crateSize, crateSize, crateSize),
-				Position = center + Vector3.new(0, 0.75 + crateSize / 2, 0),
-				Orientation = Vector3.new(0, rng:NextInteger(0, 359), 0),
-				Color = Color3.fromRGB(150, 110, 65),
-				Material = Enum.Material.WoodPlanks,
-			})
-			crate.Parent = mapFolder
-		end
-
-		local edgePoint = center + inward * (COMPOUND_PLATFORM_SIZE / 2)
-		local basePoint = edgePoint + inward * COMPOUND_RAMP_RUN
-		basePoint = Vector3.new(basePoint.X, 0.2, basePoint.Z)
-		buildRamp(mapFolder, basePoint, edgePoint, COMPOUND_RAMP_WIDTH, 1, Color3.fromRGB(90, 92, 98))
-
-		table.insert(spawnPoints, CFrame.new(center + Vector3.new(0, 3, 0)))
+		crate.Parent = mapFolder
 	end
 
-	-- Ground-level spawns too, so not everyone starts elevated.
+	local spawnPoints = {}
+
+	-- Ground-level spawns spread across the whole lower footprint,
+	-- including under the deck.
 	local groundSpawnCount = 16
 	for i = 1, groundSpawnCount do
 		local angle = (i / groundSpawnCount) * math.pi * 2
 		local radius = half - 10
 		table.insert(spawnPoints, CFrame.new(math.cos(angle) * radius, 3, math.sin(angle) * radius))
+	end
+
+	-- Deck-level spawns spread along its length.
+	local platformSpawnCount = 10
+	for i = 1, platformSpawnCount do
+		local t = (i - 0.5) / platformSpawnCount
+		local z = -platformDepth / 2 + t * platformDepth
+		table.insert(spawnPoints, CFrame.new(platformCenterX, COMPOUND_PLATFORM_HEIGHT + 3, z))
 	end
 
 	return spawnPoints

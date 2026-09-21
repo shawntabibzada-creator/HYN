@@ -272,9 +272,12 @@ local function computeThrowTarget(hrp, aimPoint, throwRange)
 	return origin, landingTarget
 end
 
--- The initial velocity that, under gravity alone, reaches landingTarget
--- from origin at t = GRENADE_FUSE_TIME - i.e. a real arc, not a straight
--- line. Where it actually ends up may differ once it starts bouncing.
+local GRENADE_LAUNCH_ANGLE = math.rad(45)
+
+-- The initial velocity, launched at a fixed 45-degree angle, that reaches
+-- landingTarget from origin under gravity - a consistent lobbed arc rather
+-- than a flight path that flattens out on long throws. Where it actually
+-- ends up may differ once it starts bouncing.
 local function computeArcVelocity(origin, landingTarget)
 	local gravity = Workspace.Gravity
 	local delta = landingTarget - origin
@@ -282,8 +285,15 @@ local function computeArcVelocity(origin, landingTarget)
 	local horizontalDistance = horizontalDelta.Magnitude
 	local horizontalDir = horizontalDistance > 0.001 and horizontalDelta.Unit or Vector3.new(0, 0, 0)
 
-	local horizontalSpeed = horizontalDistance / GRENADE_FUSE_TIME
-	local verticalSpeed = (delta.Y + 0.5 * gravity * GRENADE_FUSE_TIME ^ 2) / GRENADE_FUSE_TIME
+	-- A 45-degree throw can't mathematically reach a target whose height
+	-- gain exceeds the horizontal distance to it (that needs a steeper
+	-- angle) - clamp so the formula always has a valid, positive solution.
+	local effectiveDistance = math.max(horizontalDistance, 1)
+	local rise = math.min(delta.Y, effectiveDistance * 0.9)
+
+	local launchSpeed = math.sqrt((gravity * effectiveDistance ^ 2) / math.max(effectiveDistance - rise, 1))
+	local horizontalSpeed = launchSpeed * math.cos(GRENADE_LAUNCH_ANGLE)
+	local verticalSpeed = launchSpeed * math.sin(GRENADE_LAUNCH_ANGLE)
 
 	return horizontalDir * horizontalSpeed + Vector3.new(0, verticalSpeed, 0)
 end
