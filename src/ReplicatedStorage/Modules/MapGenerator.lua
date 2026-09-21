@@ -188,15 +188,40 @@ local function buildCrateYard(parent, rng, centerX, centerZ)
 	end
 end
 
+-- A plaza is never just a bare pad: a tree at the center plus at least one
+-- bench, so it reads as a built park rather than an empty gap in the grid.
 local function buildPlaza(parent, rng, centerX, centerZ)
 	buildSidewalk(parent, centerX, centerZ, Color3.fromRGB(180, 178, 170))
 
-	local benchCount = rng:NextInteger(0, 2)
+	local trunk = newPart({
+		Name = "TreeTrunk",
+		Shape = Enum.PartType.Cylinder,
+		Size = Vector3.new(6, 1, 1),
+		Orientation = Vector3.new(0, 0, 90),
+		Position = Vector3.new(centerX, 3, centerZ),
+		Color = Color3.fromRGB(90, 60, 40),
+		Material = Enum.Material.Wood,
+	})
+	trunk.Parent = parent
+
+	local foliage = newPart({
+		Name = "TreeFoliage",
+		Shape = Enum.PartType.Ball,
+		Size = Vector3.new(9, 9, 9),
+		Position = Vector3.new(centerX, 8, centerZ),
+		Color = Color3.fromRGB(50, 110, 55),
+		Material = Enum.Material.Grass,
+	})
+	foliage.Parent = parent
+
+	local benchCount = rng:NextInteger(1, 3)
 	for i = 1, benchCount do
+		local angle = (i / benchCount) * math.pi * 2
 		local bench = newPart({
 			Name = "Bench",
 			Size = Vector3.new(5, 1.4, 1.6),
-			Position = Vector3.new(centerX + (i == 1 and -6 or 6), 0.9, centerZ),
+			Position = Vector3.new(centerX + math.cos(angle) * 8, 0.9, centerZ + math.sin(angle) * 8),
+			Orientation = Vector3.new(0, math.deg(angle) + 90, 0),
 			Color = Color3.fromRGB(90, 60, 40),
 			Material = Enum.Material.Wood,
 		})
@@ -246,9 +271,9 @@ local function generateTown(mapFolder)
 			local centerZ = -half + TOWN_STREET_WIDTH + TOWN_LOT_SIZE / 2 + j * (TOWN_LOT_SIZE + TOWN_STREET_WIDTH)
 
 			local roll = rng:NextNumber()
-			if roll < 0.6 then
+			if roll < 0.75 then
 				buildBuilding(mapFolder, rng, centerX, centerZ)
-			elseif roll < 0.82 then
+			elseif roll < 0.9 then
 				buildCrateYard(mapFolder, rng, centerX, centerZ)
 			else
 				buildPlaza(mapFolder, rng, centerX, centerZ)
