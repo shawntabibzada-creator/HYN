@@ -102,7 +102,7 @@ flashButton.Parent = screenGui
 local flashReady = true
 local cooldownConn
 
-local FLASHBANG_THROW_RANGE = 90
+local FLASHBANG_THROW_RANGE = 225
 
 local function getAimPoint()
 	local camera = workspace.CurrentCamera

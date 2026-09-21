@@ -37,9 +37,10 @@ local FAST_FLASHBANG_COOLDOWN = 4 -- with the "Quick Fuse" game pass
 local FLASHBANG_RADIUS = 40
 local FLASHBANG_MAX_DURATION = 3 -- at the center of the blast
 local FLASHBANG_MIN_DURATION = 0.5 -- at the edge of the radius
-local FLASHBANG_THROW_RANGE = 90
+local FLASHBANG_THROW_RANGE = 225 -- 2.5x the original 90
 local FLASHBANG_THROW_SPEED = 110 -- studs per second, sets how long it's in the air
 local FLASHBANG_MIN_FLIGHT_TIME = 0.15
+local FLASHBANG_BACK_TURNED_MULTIPLIER = 0.3 -- min effect when facing fully away from the blast
 local SPECTATOR_POSITION = Vector3.new(0, 300, 0)
 
 local SIGN_COLORS = {
@@ -306,6 +307,17 @@ ThrowFlashbang.OnServerEvent:Connect(function(player, aimPoint)
 						local closeness = 1 - (distance / FLASHBANG_RADIUS)
 						local duration = FLASHBANG_MIN_DURATION
 							+ (FLASHBANG_MAX_DURATION - FLASHBANG_MIN_DURATION) * closeness
+
+						-- Looking at the blast gets the full duration; looking
+						-- away tapers it down to a minimum, not to zero.
+						local playerToBlast = (landingPoint - otherHrp.Position)
+						if playerToBlast.Magnitude > 0.001 then
+							local facingDot = otherHrp.CFrame.LookVector:Dot(playerToBlast.Unit)
+							local facingFactor = FLASHBANG_BACK_TURNED_MULTIPLIER
+								+ (1 - FLASHBANG_BACK_TURNED_MULTIPLIER) * ((facingDot + 1) / 2)
+							duration *= facingFactor
+						end
+
 						FlashbangEffect:FireClient(other, duration)
 					end
 				end
