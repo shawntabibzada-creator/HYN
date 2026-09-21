@@ -14,6 +14,11 @@ local MapGenerator = require(ReplicatedStorage.Modules.MapGenerator)
 local CodeUtils = require(ReplicatedStorage.Modules.CodeUtils)
 local MonetizationService = require(ServerScriptService.Modules.MonetizationService)
 
+-- This arena is small enough that content streaming only causes trouble:
+-- large single parts (the floor slabs) can pop in/out as a whole as a
+-- player moves, instead of streaming gracefully. Force it off.
+Workspace.StreamingEnabled = false
+
 local Remotes = ReplicatedStorage:WaitForChild("Remotes")
 local SubmitCodeGuess = Remotes.SubmitCodeGuess
 local ThrowFlashbang = Remotes.ThrowFlashbang
