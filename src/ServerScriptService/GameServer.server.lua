@@ -54,7 +54,7 @@ local FLASHBANG_THROW_RANGE = 225
 local FLASHBANG_BACK_TURNED_MULTIPLIER = 0.3 -- min effect when facing fully away from the blast
 
 local EMP_COOLDOWN = 8
-local EMP_RADIUS = 25
+local EMP_RADIUS = 14
 local EMP_BLOCK_DURATION = 4 -- seconds guessing is jammed for
 local EMP_THROW_RANGE = 150
 

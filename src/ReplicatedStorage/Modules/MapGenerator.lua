@@ -425,13 +425,21 @@ local function generateDesert(mapFolder)
 		x += DESERT_CELL_SIZE
 	end
 
+	-- Smooth Terrain blends neighboring FillBlock columns into curved
+	-- dunes rather than sharp steps, so the real surface at an arbitrary
+	-- (x, z) can sit a few studs off from what duneHeightAt() alone would
+	-- suggest - worse the bigger the height difference between
+	-- neighboring cells. Rather than chase an exact match, spawn well
+	-- above the formula height and let gravity settle the character onto
+	-- whatever the actual surface turns out to be (there's no fall damage
+	-- in this game, so the extra drop costs nothing).
 	local spawnPoints = {}
 	local spawnCount = 24
 	for i = 1, spawnCount do
 		local angle = (i / spawnCount) * math.pi * 2
 		local radius = half - 10
 		local sx, sz = math.cos(angle) * radius, math.sin(angle) * radius
-		table.insert(spawnPoints, CFrame.new(sx, duneHeightAt(sx, sz, seed) + 3, sz))
+		table.insert(spawnPoints, CFrame.new(sx, duneHeightAt(sx, sz, seed) + 15, sz))
 	end
 
 	return spawnPoints
