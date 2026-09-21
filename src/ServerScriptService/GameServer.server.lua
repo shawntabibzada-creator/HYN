@@ -77,7 +77,7 @@ local STUN_THROW_RANGE = 150
 
 local SCANNER_COOLDOWN = 10
 local SCANNER_RADIUS = 45 -- ignores walls/facing - a real information tool, not a debuff
-local SCANNER_REVEAL_DURATION = 5
+local SCANNER_REVEAL_DURATION = 0.1 -- a brief flash of the code, not a sustained reveal
 local SCANNER_THROW_RANGE = 150
 
 local BOUNTY_KILL_THRESHOLD = 2 -- round kills needed to become (or take over) the bounty
